@@ -713,6 +713,7 @@ class MapFetcher:
                 md, _vector_source(self._parser, payload, self._ijai_grid),
                 ijai_grid=self._ijai_grid,
                 json_grid=self._json_grid,
+                dreame_grid=(self._brand == "dreame"),
                 units_per_metre=self._overlay_units,
                 carpets=carpets,
                 path_segments=path_segments,
