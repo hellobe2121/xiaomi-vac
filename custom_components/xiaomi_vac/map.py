@@ -3,6 +3,7 @@ attribute contract the card consumes. Synchronous; run in an executor."""
 from __future__ import annotations
 
 import hashlib
+import base64
 import io
 import json
 import logging
@@ -591,6 +592,40 @@ class MapFetcher:
             _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
             attempt.outcome = "undecryptable"
             return None
+        return self._result_from_unpacked(unpacked, attempt)
+
+    def decode_live_frame(self, value: str) -> bytes | None:
+        """Decode an MQTT live map frame: url-safe base64 wrapping zlib bytes.
+
+        MQTT frames are NOT AES-encrypted (unlike the cloud blobs) — verified
+        live on dreame.vacuum.r2211o. Returns None for anything undecodable.
+        """
+        try:
+            norm = value.replace("_", "/").replace("-", "+")
+            raw = base64.b64decode(norm + "=" * (-len(norm) % 4))
+            return zlib.decompress(raw)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def with_vacuum_position(self, unpacked: bytes, pos: tuple[int, int, int]) -> bytes:
+        """Return a copy of the unpacked map with the header vacuum position
+        (offsets 5-9: x, y, angle — int16 LE signed) replaced by ``pos``.
+
+        The parser draws the position dot from these header bytes, so
+        patching them before parse moves the dot without touching anything
+        else (geometry, rooms, charger all come from the same blob).
+        """
+        b = bytearray(unpacked)
+        for off, val in zip((5, 7, 9), pos):
+            b[off:off + 2] = int(val).to_bytes(2, "little", signed=True)
+        return bytes(b)
+
+    def _result_from_unpacked(self, unpacked: bytes, attempt: SlotAttempt) -> MapResult | None:
+        """Parse + render an unpacked map frame into a MapResult.
+
+        Shared by the cloud fetch path and the MQTT live-map path. On success
+        remembers the unpacked bytes as the live-render base.
+        """
         carpets = parse_carpets(unpacked) if self._brand == "xiaomi" else []
         path_segments = parse_path(unpacked) if self._brand == "xiaomi" else []
         try:
@@ -619,12 +654,12 @@ class MapFetcher:
             # Decrypted fine but the parser rejected the frame (corrupt or
             # unexpected layout). The key material is good — keep the enckey.
             _LOGGER.debug(
-                "Parser rejected map frame at slot %s: %r", slot, ex, exc_info=True,
+                "Parser rejected map frame (slot %s): %r", getattr(attempt, "slot", "?"), ex, exc_info=True,
             )
             attempt.outcome = "parse_rejected"
             return None
         if md.image is None or md.image.is_empty:
-            _LOGGER.debug("Parsed map at slot %s is empty", slot)
+            _LOGGER.debug("Parsed map at slot %s is empty", getattr(attempt, "slot", "?"))
             attempt.outcome = "empty_render"
             return None
 
@@ -658,6 +693,10 @@ class MapFetcher:
         }
         attempt.outcome = "rendered"
         attempt.key_type = self.last_key_type
+        # Remember the frame bytes as the MQTT live-render base; the live path
+        # re-renders these with a patched vacuum position (see
+        # with_vacuum_position).
+        self._last_unpacked = unpacked
         hash_payload = (
             unpacked.encode("utf-8") if isinstance(unpacked, str) else unpacked
         )
