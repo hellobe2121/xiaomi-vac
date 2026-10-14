@@ -504,6 +504,43 @@ class MapFetcher:
                     map_data.path = Path(len(path_points), 1, 0, [path_points])
         return map_data
 
+    def _filter_dreame_stale_rooms(self, md, unpacked: bytes) -> None:
+        """Drop stale segment outlines from the dreame rooms list.
+
+        Dreame firmware keeps old segment rectangles in the map's RISM layer
+        after room edits; the device's own per-segment cleanset in the map
+        trailer lists only the segments it will actually clean. Intersecting
+        with it keeps the card's tap targets on real rooms (verified live on
+        dreame.vacuum.r2211o: the map carried junk segments 66-73 overlapping
+        the real 1-9, and the device silently no-ops cleans targeted at them).
+        """
+        if self._brand != "dreame" or not md.rooms:
+            return
+        try:
+            from vacuum_map_parser_dreame.map_data_parser import DreameMapDataParser
+            header = DreameMapDataParser._parse_header(unpacked)  # noqa: SLF001
+            trailer = unpacked[
+                DreameMapDataParser.HEADER_SIZE
+                + header.image_width * header.image_height:
+            ]
+            cleanset = json.loads(trailer.decode("utf8")).get("cleanset") or {}
+            if isinstance(cleanset, str):  # nested JSON string on r2211o
+                cleanset = json.loads(cleanset)
+            valid = {int(k) for k in cleanset}
+            if valid:
+                before = len(md.rooms)
+                md.rooms = {
+                    rid: room for rid, room in md.rooms.items() if int(rid) in valid
+                }
+                if len(md.rooms) != before:
+                    # Change the served content, so the cache's content-hash
+                    # dedupe doesn't keep serving the pre-filter result.
+                    md._dreame_filter_suffix = "|dreame_rooms:" + ",".join(
+                        str(r) for r in sorted(md.rooms)
+                    )  # noqa: SLF001
+        except (ValueError, KeyError, TypeError, AttributeError):
+            _LOGGER.debug("dreame stale-room filter skipped", exc_info=True)
+
     def fetch(self, slot: str = "0") -> MapResult | None:
         """Fetch + decrypt + parse one cloud upload slot ("0" or "1").
 
@@ -562,6 +599,7 @@ class MapFetcher:
                 md = self._parse_viomi_json_trailer(unpacked)
             if md is None:
                 md = self._parser.parse(unpacked)
+                self._filter_dreame_stale_rooms(md, unpacked)
             vector = map_vector.vector_map(
                 md, _vector_source(self._parser, unpacked, self._ijai_grid),
                 ijai_grid=self._ijai_grid,
@@ -620,13 +658,17 @@ class MapFetcher:
         }
         attempt.outcome = "rendered"
         attempt.key_type = self.last_key_type
+        hash_payload = (
+            unpacked.encode("utf-8") if isinstance(unpacked, str) else unpacked
+        )
+        filter_suffix = getattr(md, "_dreame_filter_suffix", None)
+        if filter_suffix:
+            hash_payload += filter_suffix.encode("utf-8")
         return MapResult(
             image_png=buf.getvalue(),
             attributes=attributes,
             vector=vector,
             map_id=vector.get("map_id"),
             # xiaomi's _unpack returns a str (JSON text), every other brand bytes.
-            content_hash=hashlib.sha256(
-                unpacked.encode("utf-8") if isinstance(unpacked, str) else unpacked
-            ).hexdigest(),
+            content_hash=hashlib.sha256(hash_payload).hexdigest(),
         )
