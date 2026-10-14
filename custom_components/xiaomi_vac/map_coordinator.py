@@ -261,8 +261,34 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
         self._last_fast_push = now
         self.data.image_png = result.image_png
         self.data.attributes["vacuum_position"] = result.attributes.get("vacuum_position")
+        self._stamp_live_vacuum(self.data)
         self.async_update_listeners()
         _LOGGER.debug("live map fast-pushed (pos=%s)", self._live_position[:2])
+
+    def _stamp_live_vacuum(self, data: MapResult) -> None:
+        """Write the latest MQTT position into a serve payload's vector(s).
+
+        The vector's `vacuum` comes from the decoded blob's header, which lags
+        the MQTT P-frames the fast path tracks; the card's map SVG reads it
+        from this endpoint's JSON, so stamp the freshest known position into
+        the active map entry (and the back-compat single vector) whenever a
+        payload is built or pushed. Coordinates are converted with the brand's
+        overlay units (the angle is never a length and passes through).
+        """
+        fetcher = self._fetcher
+        pos = self._live_position
+        if fetcher is None or pos is None or data is None:
+            return
+        vac = {
+            "x": pos[0] / fetcher._overlay_units,  # noqa: SLF001
+            "y": pos[1] / fetcher._overlay_units,  # noqa: SLF001
+            "a": pos[2],
+        }
+        if isinstance(data.vector, dict):
+            data.vector["vacuum"] = vac
+        for entry in data.maps or []:
+            if isinstance(entry, dict) and entry.get("active"):
+                entry["vacuum"] = vac
 
     async def _async_render_live(self) -> None:
         """Re-render the cached base map with the live position and push it."""
@@ -284,6 +310,7 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
             return
         self.data.image_png = result.image_png
         self.data.attributes["vacuum_position"] = result.attributes.get("vacuum_position")
+        self._stamp_live_vacuum(self.data)
         self.async_update_listeners()
         _LOGGER.debug("live map pushed (pos=%s)", self._live_position[:2])
 
@@ -620,6 +647,9 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
             }
             for map_id, cached in cache.all().items()
         ]
+        # Serve the freshest MQTT-known vacuum position, not the decoded blob's
+        # (header) one — P-frames move it between full decodes.
+        self._stamp_live_vacuum(served)
         return served
 
     async def _async_update_data(self) -> MapResult:
