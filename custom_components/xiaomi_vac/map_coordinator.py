@@ -750,6 +750,13 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
                 keep_ids = {int(m["id"]) for m in maps_meta if m.get("id") is not None}
                 if keep_ids:
                     await cache.async_prune(keep_ids)
+            elif not self._has_map_list and active_id is not None:
+                # Single-map profile (e.g. dreame): the device exposes no map
+                # list, so only the active map can ever be refreshed — anything
+                # else in the cache is a stale page that would render as an
+                # extra map tab forever (the r2211o's MQTT curMapId drifts,
+                # 46 -> 45, and used to file identical floors under each).
+                await cache.async_prune({active_id})
 
             result = self._serve(cache, active_id, maps_meta)
             self.last_cycle.set_served(decoded=bool(decoded), have_result=result is not None)
