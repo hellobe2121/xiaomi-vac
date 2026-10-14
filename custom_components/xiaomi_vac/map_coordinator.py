@@ -61,6 +61,9 @@ _MAP_REFRESH_WAIT_SECONDS = 120.0
 # MQTT live frames arrive every ~3s while cleaning; a full re-render costs
 # ~1-2s in an executor, so render at most this often.
 _LIVE_RENDER_MIN_INTERVAL = 8.0
+# Position-only fast renders (dot stamped on the cached base) are ~tens of ms;
+# this only floors the push rate to avoid flooding listeners on frame bursts.
+_LIVE_FAST_MIN_INTERVAL = 1.0
 _MAP_REFRESH_POLL_SECONDS = 3.0
 _REFRESH_READY_ACTIVITIES = {"docked", "idle"}
 
@@ -131,11 +134,14 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
         self._pending_entry_updates: dict[str, str] = {}
         # MQTT live-map state: latest vacuum position from the map-frame
         # headers (x, y, angle — map mm), and render throttling. Frames
-        # arrive every ~3s while cleaning; re-rendering the PNG costs
-        # ~1-2s, so we render at most every _LIVE_RENDER_MIN_INTERVAL s.
+        # arrive every ~3s while cleaning; a full parse+render costs ~1-2s
+        # so those run at most every _LIVE_RENDER_MIN_INTERVAL s, and the
+        # frames in between get a ~10ms position-only stamp (dot on the
+        # cached dotless base) instead.
         self._live_position: tuple[int, int, int] | None = None
         self._last_live_render: float = 0.0
         self._live_render_lock = asyncio.Lock()
+        self._last_fast_push: float = 0.0
         # What the most recent cycle did; replaced at the start of every cycle.
         self.last_cycle: MapCycleRecord | None = None
         entry.async_on_unload(control.async_add_listener(self._on_control_update))
@@ -217,12 +223,46 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
             fetcher._last_unpacked = unpacked  # noqa: SLF001
         now = time.monotonic()
         if now - self._last_live_render < _LIVE_RENDER_MIN_INTERVAL:
+            # Inside the full-render throttle window: stamp the dot on the
+            # cached dotless base instead (~tens of ms, no parse/render).
+            await self._async_render_position_only()
             return
         async with self._live_render_lock:
             if now - self._last_live_render < _LIVE_RENDER_MIN_INTERVAL:
+                await self._async_render_position_only()
                 return
             self._last_live_render = now
             await self._async_render_live()
+
+    async def _async_render_position_only(self) -> None:
+        """Push a position-only render (P-frame) between full renders.
+
+        Falls back silently (the 8s full-render cadence still applies) when no
+        base image is cached yet or the stamp fails.
+        """
+        fetcher = self._fetcher
+        now = time.monotonic()
+        if (
+            fetcher is None
+            or self.data is None
+            or self._live_position is None
+            or now - self._last_fast_push < _LIVE_FAST_MIN_INTERVAL
+        ):
+            return
+        try:
+            result = await self.hass.async_add_executor_job(
+                fetcher.render_position_only, self._live_position,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("fast position render failed", exc_info=True)
+            return
+        if result is None or self.data is None:
+            return
+        self._last_fast_push = now
+        self.data.image_png = result.image_png
+        self.data.attributes["vacuum_position"] = result.attributes.get("vacuum_position")
+        self.async_update_listeners()
+        _LOGGER.debug("live map fast-pushed (pos=%s)", self._live_position[:2])
 
     async def _async_render_live(self) -> None:
         """Re-render the cached base map with the live position and push it."""
