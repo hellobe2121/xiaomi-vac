@@ -249,10 +249,10 @@
         "name": "Levensduur dweil"
       },
       "dust_bag_life": {
-      "name": "Levensduur stofzak"
+        "name": "Levensduur stofzak"
       },
       "detergent_life": {
-      "name": "Levensduur schoonmaakmiddel"
+        "name": "Levensduur schoonmaakmiddel"
       },
       "drying_progress": {
         "name": "Voortgang dweilen drogen"
