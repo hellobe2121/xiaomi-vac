@@ -159,3 +159,27 @@ def test_mapfetcher_fetch_full_chain_xiaomi_json():
     if result is not None:
         assert isinstance(result.content_hash, str)
         assert len(result.content_hash) == 64  # sha256 hex digest
+
+
+def test_mapfetcher_fetch_splits_rooms_when_room_ids_collide():
+    """ov21gl's map_room_info sends room_id 0 for every grid_id. Both the
+    parser's `rooms` and the traced contours must fall back to grid ids, or
+    every room merges into one and a click selects the whole map."""
+    model = "xiaomi.vacuum.ov21gl"
+    cells = bytes([3, 3, 0, 4, 4] * 5)
+    payload = {
+        "map_id": 1, "map_type": 1, "height": 5, "width": 5,
+        "resolution": 50, "origin_x": 0, "origin_y": 0,
+        "map_data": base64.b64encode(zlib.compress(cells)).decode("ascii"),
+        "map_room_info": [{"grid_id": 3, "room_id": 0}, {"grid_id": 4, "room_id": 0}],
+    }
+    blob = _encrypt_like_the_real_app(payload, model=model, device_id="1234567890")
+
+    fetcher = MapFetcher(
+        FakeCloud(blob=blob), server="de", user_id="1", device_id="1234567890", model=model,
+        mac="AA:BB:CC:DD:EE:FF", wifi_sn="SN", parser_brand="xiaomi")
+
+    result = fetcher.fetch()
+    assert result is not None
+    assert {r["id"] for r in result.vector["rooms"]} == {3, 4}
+    assert {c["id"] for c in result.vector["room_chains"]} == {3, 4}

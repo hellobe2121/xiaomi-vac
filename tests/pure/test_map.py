@@ -297,6 +297,22 @@ def test_extract_json_grid_emits_the_raster_only_for_card_room_ids():
     assert grid[2 * 6 + 3] == 12
 
 
+def test_extract_json_grid_ignores_a_many_to_one_room_mapping():
+    """ov21gl reports room_id 0 for every grid_id; honouring it merged every
+    room into one chain, so a click selected the whole map. Fall back to the
+    grid ids instead."""
+    out = map_vector.extract_json_grid(
+        _json_payload(_JSON_ROWS, room_info={3: 0, 4: 0}))
+    assert {c["id"] for c in out["room_chains"]} == {3, 4}
+
+
+def test_json_room_map_keeps_a_one_to_one_mapping():
+    payload = json.loads(_json_payload(_JSON_ROWS, room_info={3: 11, 4: 12}))
+    assert map_vector.json_room_map(payload) == {3: 11, 4: 12}
+    payload = json.loads(_json_payload(_JSON_ROWS, room_info={3: 0, 4: 0}))
+    assert map_vector.json_room_map(payload) == {}
+
+
 def test_extract_json_grid_normalises_cells_to_the_legend():
     """JSON alphabet (0 / 1-2 / 3-63 / >63) -> the legend the card shares."""
     out = map_vector.extract_json_grid(

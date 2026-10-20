@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -227,9 +228,15 @@ class MapFetcher:
         carpets = parse_carpets(unpacked) if self._brand == "xiaomi" else []
         path_segments = parse_path(unpacked) if self._brand == "xiaomi" else []
         try:
-            md = self._parser.parse(unpacked)
+            payload = unpacked
+            if self._json_grid:
+                payload = json.loads(unpacked)
+                # Unusable room mapping: let the parser fall back to grid ids too.
+                if not map_vector.json_room_map(payload):
+                    payload.pop("map_room_info", None)
+            md = self._parser.parse(payload)
             vector = map_vector.vector_map(
-                md, unpacked, ijai_grid=self._ijai_grid,
+                md, payload, ijai_grid=self._ijai_grid,
                 json_grid=self._json_grid,
                 units_per_metre=self._overlay_units,
                 carpets=carpets,

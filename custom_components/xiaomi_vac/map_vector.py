@@ -328,20 +328,9 @@ def extract_json_grid(payload: Any, *, units_per_metre: float = 1.0) -> dict[str
         _LOGGER.debug("xiaomi JSON grid: %d cells for a %dx%d map", len(cells), w, h)
         return out
 
-    # grid_id -> user-facing room id. With no mapping the grid_id IS the room
-    # id, the same fallback vacuum_map_parser_xiaomi applies.
-    grid_to_room: dict[int, int] = {}
-    room_info = data.get("map_room_info") or []
-    if not isinstance(room_info, list):
-        _LOGGER.debug("xiaomi JSON grid: map_room_info is not a list")
-        room_info = []
-    for entry in room_info:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            grid_to_room[int(entry["grid_id"])] = int(entry["room_id"])
-        except (KeyError, TypeError, ValueError):
-            continue
+    # With no mapping the grid_id IS the room id, the same fallback
+    # vacuum_map_parser_xiaomi applies.
+    grid_to_room = json_room_map(data)
 
     masks: dict[int, set] = {}
     for r in range(h):
@@ -381,6 +370,27 @@ def extract_json_grid(payload: Any, *, units_per_metre: float = 1.0) -> dict[str
         out["size"] = {"x": w, "y": h}
         out["grid_rle"] = _rle(bytes(norm))
     return out
+
+
+def json_room_map(data: dict) -> dict[int, int]:
+    """grid_id -> room id from `map_room_info`; {} if absent or not one-to-one (ov21gl sends 0 for all)."""
+    room_info = data.get("map_room_info") or []
+    if not isinstance(room_info, list):
+        _LOGGER.debug("xiaomi JSON grid: map_room_info is not a list")
+        return {}
+    grid_to_room: dict[int, int] = {}
+    for entry in room_info:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            grid_to_room[int(entry["grid_id"])] = int(entry["room_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(set(grid_to_room.values())) < len(grid_to_room):
+        _LOGGER.debug("xiaomi JSON grid: map_room_info is not one-to-one (%s); "
+                      "using grid ids as room ids", grid_to_room)
+        return {}
+    return grid_to_room
 
 
 def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
