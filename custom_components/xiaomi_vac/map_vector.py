@@ -328,8 +328,6 @@ def extract_json_grid(payload: Any, *, units_per_metre: float = 1.0) -> dict[str
         _LOGGER.debug("xiaomi JSON grid: %d cells for a %dx%d map", len(cells), w, h)
         return out
 
-    # With no mapping the grid_id IS the room id, the same fallback
-    # vacuum_map_parser_xiaomi applies.
     grid_to_room = json_room_map(data)
 
     masks: dict[int, set] = {}

@@ -231,7 +231,6 @@ class MapFetcher:
             payload = unpacked
             if self._json_grid:
                 payload = json.loads(unpacked)
-                # Unusable room mapping: let the parser fall back to grid ids too.
                 if not map_vector.json_room_map(payload):
                     payload.pop("map_room_info", None)
             md = self._parser.parse(payload)
