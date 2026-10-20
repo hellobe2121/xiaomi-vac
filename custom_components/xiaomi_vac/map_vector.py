@@ -391,6 +391,26 @@ def json_room_map(data: dict) -> dict[int, int]:
     return grid_to_room
 
 
+def _room_entry(rid, room, to_m) -> dict:
+    """Export one room, anchoring the label at the bbox centre when the parser gave no text position.
+
+    @param rid: room id key from the parsed map.
+    @param room: parser Room with name, pos_x/pos_y and bbox corners.
+    @param to_m: unit converter for this brand.
+    @returns dict with id, name, cx, cy and bbox.
+    """
+    cx, cy = room.pos_x, room.pos_y
+    if (cx is None or cy is None) and None not in (room.x0, room.y0, room.x1, room.y1):
+        cx = (room.x0 + room.x1) / 2
+        cy = (room.y0 + room.y1) / 2
+    return {
+        "id": rid,
+        "name": room.name,
+        "cx": to_m(cx),
+        "cy": to_m(cy),
+        "bbox": [to_m(room.x0), to_m(room.y0), to_m(room.x1), to_m(room.y1)],
+    }
+
 def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
                json_grid: bool = False, units_per_metre: float = 1.0,
                carpets: list[list[float]] | None = None,
@@ -445,16 +465,7 @@ def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
     if md.goto is not None:
         out["goto"] = _pt(md.goto, to_m)
 
-    out["rooms"] = [
-        {
-            "id": rid,
-            "name": r.name,
-            "cx": to_m(r.pos_x),
-            "cy": to_m(r.pos_y),
-            "bbox": [to_m(r.x0), to_m(r.y0), to_m(r.x1), to_m(r.y1)],
-        }
-        for rid, r in (md.rooms or {}).items()
-    ]
+    out["rooms"] = [_room_entry(rid, r, to_m) for rid, r in (md.rooms or {}).items()]
     out["walls"] = [[to_m(w.x0), to_m(w.y0), to_m(w.x1), to_m(w.y1)]
                     for w in (md.walls or [])]
     out["no_go"] = [[to_m(v) for v in a.as_list()] for a in (md.no_go_areas or [])]

@@ -40,9 +40,9 @@ const modelShort = (m) => {
 };
 // shape 1 is the default fallback for unmapped models
 const MODEL_SHAPE = Object.fromEntries([
-  [1, ["dreame.mb1808","dreame.mc1808","xiaomi.ov21gl","xiaomi.ov42gl","xiaomi.ov43gb","dreame.md1808","dreame.p2008","dreame.p2140a","dreame.p2140o","dreame.p2140p","ijai.v10","ijai.v14"]],
+  [1, ["dreame.mb1808","dreame.mc1808","xiaomi.e101gb","xiaomi.ov21cn","xiaomi.ov21gl","xiaomi.ov31gl","xiaomi.ov42gl","xiaomi.ov43gb","xiaomi.pv21cn","dreame.md1808","dreame.p2008","dreame.p2140a","dreame.p2140o","dreame.p2140p","ijai.v10","ijai.v14"]],
   [2, ["dreame.p2029","dreame.p2028","dreame.p2028a","dreame.p2150b","dreame.p2150o"]],
-  [3, ["ijai.v2","ijai.v3","xiaomi.c104","rockrobo.v1","xiaomi.d110ch","xiaomi.d103cn","xiaomi.d102gl","xiaomi.d102ev","xiaomi.d101","xiaomi.c107","xiaomi.c102gl","xiaomi.c102cn","xiaomi.c101eu","xiaomi.c101","dreame.p2114a","dreame.p2114o","dreame.r2210","dreame.r2209","dreame.r2211o","dreame.r2228","dreame.r2228o","dreame.r2228z","dreame.r2232a","dreame.r2233","dreame.r2246","dreame.r2247","dreame.r2254","dreame.s5"]],
+  [3, ["xiaomi.ov51gl","ijai.v2","ijai.v3","xiaomi.c104","rockrobo.v1","xiaomi.d110ch","xiaomi.d103cn","xiaomi.d102gl","xiaomi.d102ev","xiaomi.d101","xiaomi.c107","xiaomi.c102gl","xiaomi.c102cn","xiaomi.c101eu","xiaomi.c101","dreame.p2114a","dreame.p2114o","dreame.r2210","dreame.r2209","dreame.r2211o","dreame.r2228","dreame.r2228o","dreame.r2228z","dreame.r2232a","dreame.r2233","dreame.r2246","dreame.r2247","dreame.r2254","dreame.s5"]],
   [4, ["ijai.v17","ijai.v18","ijai.v19","xiaomi.b106eu"]],
   [5, ["dreame.p2041","dreame.p2041o"]],
   [6, ["dreame.p2009","dreame.p2036"]],
@@ -91,8 +91,31 @@ const parseRGBA = (s) => {
 const MDI = {
   play: "mdi:play", pause: "mdi:pause", dock: "mdi:home-map-marker",
   locate: "mdi:map-marker-radius", fan: "mdi:fan", water: "mdi:water", map: "mdi:layers",
-  tools: "mdi:tools",
+  tools: "mdi:tools", zone: "mdi:vector-rectangle", zoomReset: "mdi:fit-to-screen-outline",
 };
+const ZONE_CLEAN_MODELS = new Set([
+  "ijai.vacuum.v17",
+  "ijai.vacuum.v18",
+  "ijai.vacuum.v19",
+  "xiaomi.vacuum.c107",
+  "xiaomi.vacuum.d101",
+  "xiaomi.vacuum.d102ev",
+  "xiaomi.vacuum.d102gl",
+  "xiaomi.vacuum.d109gl",
+  "xiaomi.vacuum.e101gb",
+  "xiaomi.vacuum.ov21gl",
+  "xiaomi.vacuum.ov21cn",
+  "xiaomi.vacuum.ov43gb",
+  "xiaomi.vacuum.ov51gl",
+  "xiaomi.vacuum.ov71gl",
+  "xiaomi.vacuum.pv21cn",
+]);
+// Shared page-swipe feel — used by both _setupSwipe (vacuum-image <-> map
+// pages) and _setupZoomDraw's own single-finger drag-to-page-swipe (a
+// zoomable map page owns every pointer that lands on it outright, so it
+// replicates this instead of handing the gesture off to _setupSwipe and
+// risking a race on whichever finger lands first in a pinch).
+const SWIPE_TH = 8, SWIPE_COMMIT = 0.16, SWIPE_VEL = 0.45;
 // Union across all models — `key` is the translation_key sensor.py assigns,
 // kept in sync with its XiaomiSensorDescription catalogue by hand.
 // _consumableRows() drops the ones a given device doesn't expose.
@@ -127,7 +150,10 @@ const TOGGLE_DEFAULTS = {
   show_active_map: true,
   show_room_labels: true,
   allow_room_cleaning: true,
+  allow_zone_cleaning: true,
   show_consumables: true,
+  show_zoom: true,
+  max_zoom: 6,
 };
 
 class XiaomiVacCard extends HTMLElement {
@@ -144,6 +170,8 @@ class XiaomiVacCard extends HTMLElement {
     this._pendSel = {};           // optimistic select values, keyed by entity_id
     this._pendSelT = {};
     this._mapsData = [];          // list of map vectors from the endpoint
+    this._zoneMode = false;
+    this._zoneRect = null;
     this._pages = [];
     this._pos = 1; this._real = 0;
     this._fetchedFor = null;
@@ -166,9 +194,9 @@ class XiaomiVacCard extends HTMLElement {
   _relevantChanged(a, b) {
     const eids = [
       this._config.vacuum,
-      `sensor.${this._base()}_battery`,
-      this._config.water || `select.${this._base()}_water_level`,
-      this._config.fan || `select.${this._base()}_fan_speed`,
+      this._batteryEid(),
+      this._waterEid(),
+      this._fanEid(),
       this._activeMapEid(),
       ...CONSUMABLES.map((c) => this._consumableEid(c.key)).filter(Boolean),
     ];
@@ -179,39 +207,47 @@ class XiaomiVacCard extends HTMLElement {
   // isn't guaranteed to match the vacuum's (renamed device, id collision, etc).
   _activeMapEid() {
     if (this._config.activeMap) return this._config.activeMap;
-    if (this._cachedMapEid && this._st(this._cachedMapEid)) return this._cachedMapEid;
+    return this._registryEid("select", "active_map") ||
+      `select.${this._base()}_active_map`;   // fallback if registry lookup misses
+  }
+  // Entity ids are localised on non-English installs (sensor.la_kelly_bateria),
+  // so the battery/fan/water guesses from the vacuum's object_id miss there too.
+  // Explicit card option first, then registry, then the English guess.
+  _batteryEid() {
+    return this._config.battery || this._registryEid("sensor", "battery") ||
+      `sensor.${this._base()}_battery`;
+  }
+  _fanEid() {
+    return this._config.fan || this._registryEid("select", "fan_speed") ||
+      `select.${this._base()}_fan_speed`;
+  }
+  _waterEid() {
+    return this._config.water || this._registryEid("select", "water_level") ||
+      `select.${this._base()}_water_level`;
+  }
+  // Find the entity on the vacuum's device with this translation_key; cached
+  // per key while the hit still has a state. Null when the registry misses.
+  _registryEid(domain, key) {
+    this._regEidCache = this._regEidCache || {};
+    const hit = this._regEidCache[key];
+    if (hit && this._st(hit)) return hit;
     const ents = this._hass && this._hass.entities;
     const vacEnt = ents && ents[this._config.vacuum];
     const deviceId = vacEnt && vacEnt.device_id;
-    if (ents && deviceId) {
-      const found = Object.keys(ents).find((eid) =>
-        eid.startsWith("select.") &&
-        ents[eid].device_id === deviceId &&
-        ents[eid].translation_key === "active_map");
-      if (found) { this._cachedMapEid = found; return found; }
-    }
-    return `select.${this._base()}_active_map`;   // fallback if registry lookup misses
+    if (!ents || !deviceId) return null;
+    const found = Object.keys(ents).find((eid) =>
+      eid.startsWith(domain + ".") &&
+      ents[eid].device_id === deviceId &&
+      ents[eid].translation_key === key);
+    if (found) this._regEidCache[key] = found;
+    return found || null;
   }
   // Same registry-lookup pattern as _activeMapEid(): the consumable sensors'
   // entity_id can carry an area-name prefix HA auto-generates on first setup
   // (e.g. "sensor.nappali_julika_neni_main_brush_life"), so guessing from the
   // vacuum's own object_id would miss them — resolve by device_id + the
   // translation_key sensor.py assigns each one instead.
-  _consumableEid(key) {
-    this._consumEidCache = this._consumEidCache || {};
-    if (this._consumEidCache[key] && this._st(this._consumEidCache[key])) return this._consumEidCache[key];
-    const ents = this._hass && this._hass.entities;
-    const vacEnt = ents && ents[this._config.vacuum];
-    const deviceId = vacEnt && vacEnt.device_id;
-    if (ents && deviceId) {
-      const found = Object.keys(ents).find((eid) =>
-        eid.startsWith("sensor.") &&
-        ents[eid].device_id === deviceId &&
-        ents[eid].translation_key === key);
-      if (found) { this._consumEidCache[key] = found; return found; }
-    }
-    return null;
-  }
+  _consumableEid(key) { return this._registryEid("sensor", key); }
   
   // One row per sensor the integration actually provides.
   _consumableRows() {
@@ -246,6 +282,13 @@ class XiaomiVacCard extends HTMLElement {
   _svc(d, s, data = {}) { this._hass.callService(d, s, data); }
   _enabled(name) { return this._config[name] !== false; }
   _mapOffset() { return this._enabled("show_vacuum_page") ? 1 : 0; }
+  // Settles a possibly-cloned carousel position (0 or N+1, the loop clones)
+  // to its real 1..N equivalent — shared by _setupSwipe's own grab-during-
+  // snap handling and _setupZoomDraw's replica of it.
+  _realPos() {
+    const n = this._pages.length;
+    return ((this._pos - 1) % n + n) % n + 1;
+  }
   _entryId() {
     const eid = this._config.map || this._config.vacuum;
     const ent = this._hass && this._hass.entities && this._hass.entities[eid];
@@ -280,10 +323,15 @@ class XiaomiVacCard extends HTMLElement {
     }
   }
   // Rebuilding the track resets the DOM; never do it mid-swipe (it would yank the
-  // carousel). Defer to the next settle, and keep the user on their current page.
+  // carousel) or mid-pinch/pan (it would yank the pointer capture out from under
+  // the user's fingers — the gesture would just silently stop responding).
+  // Defer to the next settle, and keep the user on their current page.
   _rebuild() {
     const track = this._root && this._root.querySelector(".track");
-    if (this._down || (track && track.classList.contains("anim"))) { this._pendingRebuild = true; return; }
+    if (this._down || this._zoomDown || (track && track.classList.contains("anim"))) {
+      this._pendingRebuild = true;
+      return;
+    }
     this._buildPages(true);
   }
 
@@ -333,11 +381,41 @@ class XiaomiVacCard extends HTMLElement {
            the status bar or the floating tray — the SVG scales to fit the inset */
         .pg-map{background:radial-gradient(120% 90% at 50% 0%,var(--xv-card),var(--xv-floor));
           box-sizing:border-box;padding:56px 14px 92px}
-        .pg-map svg{width:100%;height:100%;display:block}
+        .pg-map svg{width:100%;height:100%;display:block;transform-origin:0 0}
         .map-badge{position:absolute;top:64px;right:20px;z-index:4;background:var(--xv-accent);color:#fff;
           font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:5px 10px;
           border-radius:9px;box-shadow:0 4px 12px color-mix(in srgb,var(--xv-accent) 40%,transparent);
           pointer-events:none}
+        .zone-btn{position:absolute;top:64px;left:20px;z-index:5;width:36px;height:36px;border:0;border-radius:11px;
+          background:color-mix(in srgb,var(--xv-card) 88%,transparent);
+          backdrop-filter:blur(12px) saturate(180%);-webkit-backdrop-filter:blur(12px) saturate(180%);
+          color:var(--xv-ink);display:grid;place-items:center;cursor:pointer;
+          box-shadow:0 2px 10px rgba(0,0,0,.14);transition:background .2s,color .2s}
+        .zone-btn ha-icon{--mdc-icon-size:20px}
+        .zone-btn.on{background:var(--xv-accent);color:#fff}
+        .zone-btn:focus-visible{outline:2px solid var(--xv-accent);outline-offset:2px}
+        .pg-map.zoning svg{cursor:crosshair;touch-action:none}
+        .pg-map.zoning .rm{pointer-events:none}
+        /* pan-y (inherited from .vp) at scale 1 so a thumb on the map still
+           scrolls the dashboard; the browser only loses the touch once the
+           map is actually zoomed and panning it means something. */
+        .pg-map.zoomable.zoomed svg{touch-action:none}
+        .pg-map svg.zoom-anim{transition:transform .25s ease}
+        .zoom-reset{position:absolute;bottom:110px;right:20px;z-index:5;width:36px;height:36px;border:0;border-radius:11px;
+          background:color-mix(in srgb,var(--xv-card) 88%,transparent);
+          backdrop-filter:blur(12px) saturate(180%);-webkit-backdrop-filter:blur(12px) saturate(180%);
+          color:var(--xv-ink);display:grid;place-items:center;cursor:pointer;
+          box-shadow:0 2px 10px rgba(0,0,0,.14)}
+        .zoom-reset ha-icon{--mdc-icon-size:20px}
+        .zoom-reset:focus-visible{outline:2px solid var(--xv-accent);outline-offset:2px}
+        .zone-rect{fill:color-mix(in srgb,var(--xv-accent) 20%,transparent);stroke:var(--xv-accent);
+          stroke-width:0.08;stroke-dasharray:0.22 0.14}
+        .zonetag{position:absolute;left:50%;bottom:150px;z-index:6;transform:translateX(-50%);
+          background:var(--xv-accent);color:#fff;font-size:13px;font-weight:600;padding:10px 16px;border-radius:12px;
+          box-shadow:0 6px 18px rgba(0,0,0,.25);opacity:0;transition:opacity .18s,transform .18s;
+          pointer-events:none;white-space:nowrap;cursor:pointer;border:0}
+        .zonetag.show{opacity:1;transform:translateX(-50%) translateY(-5px);pointer-events:auto}
+        .zonetag.show:not(.ready){opacity:.92;background:var(--xv-ink);color:var(--xv-card);cursor:default}
         .rm{cursor:pointer;transition:stroke-width .12s}
         /* a mouse click triggers :focus (not :focus-visible), so the UA default
            outline paints a near-black ring hugging the path — kill it on tap */
@@ -408,9 +486,12 @@ class XiaomiVacCard extends HTMLElement {
         <div class="status"><span class="dot"></span><span class="stxt" aria-live="polite">—</span></div>
         <div class="batt"><span class="btxt">—</span><span class="bicon"></span></div>
       </div>
+      <button class="zone-btn" title="Draw a cleaning zone" aria-label="Draw a cleaning zone" aria-pressed="false" style="display:none"><ha-icon icon="${MDI.zone}"></ha-icon></button>
+      <button class="zoom-reset" title="Reset zoom" aria-label="Reset zoom" style="display:none"><ha-icon icon="${MDI.zoomReset}"></ha-icon></button>
       <div class="dots"></div>
       <div class="toast"></div>
       <button class="roomtag"></button>
+      <button class="zonetag"></button>
       <div class="consum-panel"></div>
       <div class="tray">
         <button class="b act-start" title="Start / pause" aria-label="Start or pause"><ha-icon icon="${MDI.play}"></ha-icon></button>
@@ -428,6 +509,7 @@ class XiaomiVacCard extends HTMLElement {
       const st = this._st(this._config.vacuum);
       const cleaning = st && st.state === "cleaning";
       this._setPending(cleaning ? "paused" : "cleaning");
+      if (!cleaning && this._sel.size) return this._cleanSelected();
       this._svc("vacuum", cleaning ? "pause" : "start", { entity_id: this._config.vacuum });
     };
     q(".act-dock").onclick = () => {
@@ -436,9 +518,11 @@ class XiaomiVacCard extends HTMLElement {
     };
     q(".act-locate").onclick = () => this._svc("vacuum", "locate", { entity_id: this._config.vacuum });
     q(".cyc-fan").onclick = () => this._cycleFan();
-    q(".cyc-water").onclick = () =>
-      this._cycleSelect(this._config.water || `select.${this._base()}_water_level`);
+    q(".cyc-water").onclick = () => this._cycleSelect(this._waterEid());
     q(".cyc-map").onclick = () => this._cycleSelect(this._activeMapEid());
+    q(".zone-btn").onclick = () => this._toggleZone();
+    q(".zoom-reset").onclick = () => this._resetZoom();
+    q(".zonetag").onclick = () => this._confirmZone();
     q(".roomtag").onclick = () => this._cleanSelected();
     q(".act-consumables").onclick = () => {
       q(".consum-panel").classList.toggle("show");
@@ -513,7 +597,7 @@ class XiaomiVacCard extends HTMLElement {
   _wirePage() {
     this._root.querySelectorAll(".rm").forEach((r) => {
       const toggle = () => {
-        if (this._blockClick || !this._enabled("allow_room_cleaning")) return;
+        if (this._blockClick || this._zoneMode || !this._enabled("allow_room_cleaning")) return;
         const id = Number(r.dataset.id);
         this._sel.has(id) ? this._sel.delete(id) : this._sel.add(id);
         this._syncRooms();
@@ -523,6 +607,20 @@ class XiaomiVacCard extends HTMLElement {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
       };
     });
+    this._root.querySelectorAll(".pg-map").forEach((pg) => {
+      const svg = pg.querySelector("svg");
+      if (svg) {
+        this._wireZoneDraw(pg, svg);
+        this._setupZoomDraw(pg, svg);
+      }
+      pg.classList.toggle("zoning", !!this._zoneMode);
+      pg.classList.toggle("zoomable", this._enabled("show_zoom"));
+    });
+    this._syncZoneBtn();
+    this._syncZoomBtn();
+    // a live-data rebuild replaces every .pg-map/svg node from scratch —
+    // reapply whatever zoom/pan the user had set before the rebuild wiped it
+    if (this._zoomState) this._zoomState.forEach((_, mi) => this._applyZoomToPageIndex(mi, false));
   }
   _setX(anim) {
     const track = this._root.querySelector(".track");
@@ -536,13 +634,19 @@ class XiaomiVacCard extends HTMLElement {
     // Pointer Events (one stream for mouse + touch + pen) with pointer capture —
     // no global window listeners, and a drag can begin mid-animation.
     let down = false, sx = 0, sy = 0, base = 0, moved = false, vert = false, t0 = 0, pid = null;
-    const TH = 8, COMMIT = 0.16, VEL = 0.45;
+    const TH = SWIPE_TH, COMMIT = SWIPE_COMMIT, VEL = SWIPE_VEL;
     const N = () => this._pages.length;
     const realPos = () => { const n = N(); return ((this._pos - 1) % n + n) % n + 1; };
 
     const onDown = (e) => {
       if (N() <= 1) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
+      // Normally never reached for a zoomable map page — _setupZoomDraw
+      // claims every pointer on it outright. Only relevant if show_zoom is
+      // off (or state is stale from before it was turned off): don't let a
+      // still-zoomed page swipe out from under the user.
+      const zst = this._zoomState && this._zoomState.get(String(this._real));
+      if (zst && zst.scale > 1.001) return;
       // Grabbing during the snap settles the in-flight swipe to a real slot first,
       // so we never start a drag from a clone (which would expose blank space).
       if (track.classList.contains("anim")) { track.classList.remove("anim"); this._pos = realPos(); }
@@ -573,7 +677,6 @@ class XiaomiVacCard extends HTMLElement {
       if (Math.abs(dx) > this._w * COMMIT || v > VEL) this._pos += dx < 0 ? 1 : -1;
       this._setX(true);
     };
-
     vp.addEventListener("pointerdown", onDown);
     vp.addEventListener("pointermove", onMove);
     vp.addEventListener("pointerup", onUp);
@@ -591,6 +694,10 @@ class XiaomiVacCard extends HTMLElement {
     });
 
     track.addEventListener("transitionend", (e) => {
+      // 'transitionend' bubbles — a descendant's OWN transform transition
+      // (e.g. the zoom layer's svg snapping back via .zoom-anim) must not be
+      // mistaken for the carousel track settling.
+      if (e.target !== track) return;
       if (e.propertyName && e.propertyName !== "transform") return;
       const n = N();
       if (this._pos <= 0) { track.classList.remove("anim"); this._pos = n; track.style.transform = `translateX(${-this._pos * this._w}px)`; }
@@ -598,8 +705,13 @@ class XiaomiVacCard extends HTMLElement {
       else track.classList.remove("anim");
       this._real = ((this._pos - 1) % n + n) % n;
       this._sel.clear(); this._syncRooms(); this._renderDots();
+      this._syncZoneBtn();
+      this._syncZoomBtn();
       // a map refresh that arrived mid-gesture was deferred — apply it now
-      if (this._pendingRebuild && !down) { this._pendingRebuild = false; this._buildPages(true); }
+      if (this._pendingRebuild && !down) {
+        this._pendingRebuild = false;
+        setTimeout(() => this._buildPages(true), 0);
+      }
     });
     window.addEventListener("resize", () => { this._w = vp.clientWidth; if (!down) this._setX(false); });
     // window 'resize' misses layout changes that don't resize the window —
@@ -712,24 +824,47 @@ class XiaomiVacCard extends HTMLElement {
       s += `<path class="rm" data-id="${p.id}" role="button" tabindex="0" aria-pressed="false" aria-label="Clean ${esc(nm)}" d="${dpath(p.rings)}" fill="${fill}" stroke="none"/>`;
     });
     // virtual walls — a user-drawn no-cross line, not real geometry, so render it
-    // as a faint dashed hint rather than a solid bar that fights the rooms
+    // as a faint dashed hint rather than a solid bar that fights the rooms.
+    // pointer-events:none throughout below: these are annotations drawn OVER
+    // the room polygons, never meant to be individually tappable — without
+    // it, a dense enough overlay (e.g. many overlapping travelled-path
+    // segments in a small, thoroughly-cleaned room) visually AND hit-test
+    // covers the room underneath, so taps there silently stop selecting it.
     (m.walls || []).forEach((w) => {
-      s += `<line x1="${tx(w[0])}" y1="${ty(w[1])}" x2="${tx(w[2])}" y2="${ty(w[3])}" stroke="var(--xv-muted)" stroke-width="0.05" stroke-linecap="round" stroke-dasharray="0.16 0.13" opacity=".35"/>`;
+      s += `<line x1="${tx(w[0])}" y1="${ty(w[1])}" x2="${tx(w[2])}" y2="${ty(w[3])}" stroke="var(--xv-muted)" stroke-width="0.05" stroke-linecap="round" stroke-dasharray="0.16 0.13" opacity=".35" pointer-events="none"/>`;
     });
     if (Array.isArray(m.path_segments)) {
       m.path_segments.forEach((segment) => {
         if (Array.isArray(segment) && segment.length > 1) {
-          s += `<polyline points="${segment.map(([x, y]) => `${tx(x)},${ty(y)}`).join(" ")}" fill="none" stroke="var(--xv-accent)" stroke-width="0.07" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>`;
+          s += `<polyline points="${segment.map(([x, y]) => `${tx(x)},${ty(y)}`).join(" ")}" fill="none" stroke="var(--xv-accent)" stroke-width="0.07" stroke-linecap="round" stroke-linejoin="round" opacity=".9" pointer-events="none"/>`;
         }
       });
     } else if (Array.isArray(m.path) && m.path.length > 1) {
-      s += `<polyline points="${m.path.map(([x, y]) => `${tx(x)},${ty(y)}`).join(" ")}" fill="none" stroke="var(--xv-accent)" stroke-width="0.07" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>`;
+      s += `<polyline points="${m.path.map(([x, y]) => `${tx(x)},${ty(y)}`).join(" ")}" fill="none" stroke="var(--xv-accent)" stroke-width="0.07" stroke-linecap="round" stroke-linejoin="round" opacity=".9" pointer-events="none"/>`;
     }
     (m.carpets || []).forEach((carpet) => {
       if (!Array.isArray(carpet) || carpet.length !== 8) return;
       const points = [[carpet[0], carpet[1]], [carpet[2], carpet[3]],
         [carpet[4], carpet[5]], [carpet[6], carpet[7]]];
-      s += `<path d="${ring(points)}" fill="#d2aa5a" fill-opacity="0.28" stroke="#d2aa5a" stroke-opacity="0.55" stroke-width="0.03"/>`;
+      s += `<path d="${ring(points)}" fill="#d2aa5a" fill-opacity="0.28" stroke="#d2aa5a" stroke-opacity="0.55" stroke-width="0.03" pointer-events="none"/>`;
+    });
+    // no-go / no-mop zones — same quadrilateral shape as carpets, styled as a
+    // hazard area (red hatch-ish fill + dashed border) so it reads distinctly
+    // from both carpets (tan, solid border) and virtual walls (a plain line).
+    // pointer-events:none: this is an annotation drawn over room polygons,
+    // never meant to be individually tappable — otherwise a zone covering
+    // most of a room would intercept taps meant to select that room.
+    (m.no_go || []).forEach((zone) => {
+      if (!Array.isArray(zone) || zone.length !== 8) return;
+      const points = [[zone[0], zone[1]], [zone[2], zone[3]],
+        [zone[4], zone[5]], [zone[6], zone[7]]];
+      s += `<path d="${ring(points)}" fill="#e2483d" fill-opacity="0.18" stroke="#e2483d" stroke-opacity="0.75" stroke-width="0.04" stroke-dasharray="0.12 0.1" pointer-events="none"/>`;
+    });
+    (m.no_mop || []).forEach((zone) => {
+      if (!Array.isArray(zone) || zone.length !== 8) return;
+      const points = [[zone[0], zone[1]], [zone[2], zone[3]],
+        [zone[4], zone[5]], [zone[6], zone[7]]];
+      s += `<path d="${ring(points)}" fill="#4696e8" fill-opacity="0.16" stroke="#4696e8" stroke-opacity="0.65" stroke-width="0.04" stroke-dasharray="0.1 0.08" pointer-events="none"/>`;
     });
     if (this._enabled("show_room_labels")) rooms.forEach((r) => {
       if (r.cx == null || !r.name) return;
@@ -748,7 +883,7 @@ class XiaomiVacCard extends HTMLElement {
   }
 
   /* ---------------- controls ---------------- */
-  _cycleFan() { this._cycleSelect(this._config.fan || `select.${this._base()}_fan_speed`); }
+  _cycleFan() { this._cycleSelect(this._fanEid()); }
   _cycleSelect(eid) {
     const e = this._st(eid); if (!e) return;
     const opts = e.attributes.options || []; if (!opts.length) return;
@@ -769,8 +904,362 @@ class XiaomiVacCard extends HTMLElement {
   }
   _cleanSelected() {
     if (!this._sel.size || !this._enabled("allow_room_cleaning")) return;
-    this._svc("xiaomi_vac", "clean_segment", { entity_id: this._config.vacuum, segments: [...this._sel] });
+    // `_sel` holds display/card ids (what the pixel grid and room colouring
+    // use) — the device's own room-clean action wants its OWN id for that
+    // room, which for viomi can differ from the display id (see map.py's
+    // native_id). Translate at the boundary, right before the service call,
+    // so selection/highlighting code elsewhere never has to care.
+    const m = this._maps()[this._real - this._mapOffset()];
+    const idIndex = roomIndexById((m && m.rooms) || []);
+    const segments = [...this._sel].map((id) => {
+      const r = (m && m.rooms || [])[idIndex[id]];
+      return r && r.native_id != null ? r.native_id : id;
+    });
+    this._svc("xiaomi_vac", "clean_segment", { entity_id: this._config.vacuum, segments });
     this._sel.clear(); this._syncRooms();
+  }
+
+  _syncZoneBtn() {
+    const btn = this._root && this._root.querySelector(".zone-btn");
+    if (!btn) return;
+    const onMap = this._real >= this._mapOffset() && this._real < this._pages.length;
+    const vacuum = this._st(this._config.vacuum);
+    const supported = ZONE_CLEAN_MODELS.has(vacuum && vacuum.attributes.model);
+    const show = supported && this._enabled("allow_zone_cleaning") &&
+      this._enabled("show_map") && this._maps().length > 0 && onMap;
+    btn.style.display = show ? "" : "none";
+    if (!show && this._zoneMode) this._toggleZone();
+  }
+  _toggleZone() {
+    this._zoneMode = !this._zoneMode;
+    const btn = this._root.querySelector(".zone-btn");
+    if (btn) {
+      btn.classList.toggle("on", this._zoneMode);
+      btn.setAttribute("aria-pressed", this._zoneMode ? "true" : "false");
+    }
+    if (!this._zoneMode) { this._zoneRect = null; this._clearZoneRects(); }
+    this._root.querySelectorAll(".pg-map").forEach((pg) => pg.classList.toggle("zoning", this._zoneMode));
+    this._updateZoneTag();
+  }
+  _clearZoneRects() {
+    this._root.querySelectorAll(".zone-rect").forEach((el) => el.remove());
+  }
+  _svgToMetres(svg, e) {
+    if (!svg.getScreenCTM) return null;
+    const m = svg.getScreenCTM();
+    if (!m) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(m.inverse());
+    return { x: p.x, y: -p.y };
+  }
+  _rectFrom(a, b) {
+    return {
+      x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y),
+      x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y),
+    };
+  }
+  _paintZoneRect(svg, r) {
+    let el = svg.querySelector(".zone-rect");
+    if (!el) {
+      el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      el.setAttribute("class", "zone-rect");
+      svg.appendChild(el);
+    }
+    el.setAttribute("x", r.x0.toFixed(3));
+    el.setAttribute("y", (-r.y1).toFixed(3));
+    el.setAttribute("width", (r.x1 - r.x0).toFixed(3));
+    el.setAttribute("height", (r.y1 - r.y0).toFixed(3));
+  }
+  _wireZoneDraw(pg, svg) {
+    let drawing = false, start = null;
+    const onDown = (e) => {
+      if (!this._zoneMode || !this._enabled("allow_zone_cleaning")) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      e.stopPropagation();
+      start = this._svgToMetres(svg, e);
+      if (!start) return;
+      drawing = true;
+      this._zoneRect = null;
+      this._clearZoneRects();
+      this._updateZoneTag();
+      try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+    const onMove = (e) => {
+      if (!drawing || !start) return;
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      const cur = this._svgToMetres(svg, e);
+      if (cur) this._paintZoneRect(svg, this._rectFrom(start, cur));
+    };
+    const onUp = (e) => {
+      if (!drawing) return;
+      drawing = false;
+      e.stopPropagation();
+      const cur = this._svgToMetres(svg, e);
+      const r = cur && start ? this._rectFrom(start, cur) : null;
+      start = null;
+      if (r && r.x1 > r.x0 && r.y1 > r.y0) {
+        this._zoneRect = r;
+        this._paintZoneRect(svg, r);
+      } else {
+        this._clearZoneRects();
+      }
+      this._updateZoneTag();
+    };
+    svg.addEventListener("pointerdown", onDown);
+    svg.addEventListener("pointermove", onMove);
+    svg.addEventListener("pointerup", onUp);
+    svg.addEventListener("pointercancel", onUp);
+  }
+
+  /* ---------------- map zoom/pan ----------------
+   * Scale/pan live as a plain CSS transform on the page's own <svg> — the
+   * SVG's viewBox (computed in _mapSVG, auto-fit to content) stays untouched
+   * and IS "100%"/reset. State is kept per page (keyed by the same data-mi
+   * every .pg-map instance — including its carousel clone — already carries)
+   * in `this._zoomState`, a Map that survives `_buildPages()` rebuilds (which
+   * replace every .pg-map/svg node wholesale on each live poll) so a user's
+   * zoom/pan isn't wiped out from under them by the next map refresh.
+   */
+  _maxZoom() {
+    const v = Number(this._config.max_zoom);
+    return v > 1 ? v : 6;
+  }
+  _zoomStateFor(mi) {
+    if (!this._zoomState) this._zoomState = new Map();
+    let st = this._zoomState.get(mi);
+    if (!st) { st = { scale: 1, panX: 0, panY: 0 }; this._zoomState.set(mi, st); }
+    return st;
+  }
+  // Clamp pan so the scaled content always still covers the viewport — svg's
+  // own clientWidth/height is its LAYOUT size, unaffected by the transform
+  // applied to it, i.e. exactly the "w/h at scale 1" this math wants.
+  _clampPan(st, svg) {
+    const w = svg.clientWidth, h = svg.clientHeight;
+    if (!w || !h) return;
+    const minX = Math.min(0, w - w * st.scale), minY = Math.min(0, h - h * st.scale);
+    st.panX = Math.max(minX, Math.min(0, st.panX));
+    st.panY = Math.max(minY, Math.min(0, st.panY));
+  }
+  // `data-mi` is shared by a page and its carousel loop-clone (both need the
+  // same transform so the illusion holds up mid-swipe) — update every match.
+  _applyZoomToPageIndex(mi, animate) {
+    const st = this._zoomStateFor(mi);
+    this._root.querySelectorAll(`.pg-map[data-mi="${mi}"]`).forEach((pg) => {
+      pg.classList.toggle("zoomed", st.scale > 1);
+      const svg = pg.querySelector("svg");
+      if (!svg) return;
+      svg.classList.toggle("zoom-anim", !!animate);
+      svg.style.transform = `translate(${st.panX}px,${st.panY}px) scale(${st.scale})`;
+    });
+    this._syncZoomBtn();
+  }
+  _syncZoomBtn() {
+    const btn = this._root && this._root.querySelector(".zoom-reset");
+    if (!btn) return;
+    const onMap = this._real >= this._mapOffset() && this._real < this._pages.length;
+    const st = onMap && this._zoomState && this._zoomState.get(String(this._real));
+    const show = this._enabled("show_zoom") && onMap && st && st.scale > 1.02;
+    btn.style.display = show ? "" : "none";
+  }
+  _resetZoom() {
+    const mi = String(this._real);
+    const st = this._zoomStateFor(mi);
+    st.scale = 1; st.panX = 0; st.panY = 0;
+    this._applyZoomToPageIndex(mi, true);
+  }
+  // Owns EVERY pointer gesture on a zoomable map page outright, from the very
+  // first finger — pinch zoom, pan-once-zoomed, AND (replicated here rather
+  // than handed off to _setupSwipe's separate .vp listener) the single-
+  // finger swipe-to-next-page at 100% zoom. A page and _setupSwipe's own
+  // listener both reacting to the SAME first finger (one deciding "maybe a
+  // swipe", the other "maybe a pinch") is exactly the kind of two-listener
+  // race that was intermittently eating pinches before this was unified.
+  _setupZoomDraw(pg, svg) {
+    const mi = pg.dataset.mi;
+    const pts = new Map(); // pointerId -> last {x,y}
+    let pinchDist = 0, pinchScale0 = 1;
+    let panStart = null; // {x,y,panX0,panY0} — panning once already zoomed in
+    let drag = null;     // {x,y,t0,base,moved,vert} — swipe-to-page replica
+
+    const dist = () => {
+      const [a, b] = [...pts.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+    const mid = () => {
+      const [a, b] = [...pts.values()];
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    };
+
+    const onDown = (e) => {
+      if (!this._enabled("show_zoom") || this._zoneMode) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const st = this._zoomStateFor(mi);
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      e.stopPropagation();
+      this._zoomDown = true;
+      // Capture is DEFERRED until the gesture actually moves (see onMove) —
+      // capturing on every press retargets the subsequent click to svg, so a
+      // stationary tap never reaches the room path underneath and room
+      // selection silently fails (same fix as _setupSwipe's own onDown).
+      if (pts.size === 2) {
+        // two fingers down is unambiguously a pinch, not a tap — capture both
+        pts.forEach((_, id) => { try { svg.setPointerCapture(id); } catch (_) {} });
+        pinchDist = dist();
+        pinchScale0 = st.scale;
+        panStart = null; drag = null;
+      } else if (pts.size === 1) {
+        if (st.scale > 1.001) {
+          panStart = { x: e.clientX, y: e.clientY, panX0: st.panX, panY0: st.panY, moved: false, pid: e.pointerId };
+        } else {
+          const track = this._root.querySelector(".track");
+          // Grabbing during the snap settles to a real slot first, same as
+          // _setupSwipe's own onDown — never start a drag from a clone.
+          if (track.classList.contains("anim")) { track.classList.remove("anim"); this._pos = this._realPos(); }
+          drag = { x: e.clientX, y: e.clientY, t0: Date.now(), base: -this._pos * this._w, moved: false, vert: false, pid: e.pointerId };
+        }
+      }
+    };
+    const onMove = (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const st = this._zoomStateFor(mi);
+      if (pts.size === 2) {
+        if (e.cancelable) e.preventDefault();
+        const prect = pg.getBoundingClientRect();
+        const m = mid();
+        const mx = m.x - prect.left, my = m.y - prect.top;
+        const s0 = st.scale;
+        const s1 = pinchDist > 0
+          ? Math.min(this._maxZoom(), Math.max(1, pinchScale0 * (dist() / pinchDist)))
+          : s0;
+        // keep the midpoint under the fingers fixed as scale steps s0 -> s1
+        st.panX = mx + (s1 / s0) * (st.panX - mx);
+        st.panY = my + (s1 / s0) * (st.panY - my);
+        st.scale = s1;
+        this._clampPan(st, svg);
+        this._applyZoomToPageIndex(mi, false);
+      } else if (panStart) {
+        const dx = e.clientX - panStart.x, dy = e.clientY - panStart.y;
+        if (!panStart.moved) {
+          if (Math.hypot(dx, dy) < SWIPE_TH) return;
+          panStart.moved = true;
+          try { svg.setPointerCapture(panStart.pid); } catch (_) {}
+        }
+        if (e.cancelable) e.preventDefault();
+        st.panX = panStart.panX0 + dx;
+        st.panY = panStart.panY0 + dy;
+        this._clampPan(st, svg);
+        this._applyZoomToPageIndex(mi, false);
+      } else if (drag) {
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        if (!drag.moved && !drag.vert) {
+          if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > SWIPE_TH) { drag.vert = true; return; }
+          if (Math.abs(dx) > SWIPE_TH) { drag.moved = true; try { svg.setPointerCapture(drag.pid); } catch (_) {} }
+        }
+        if (drag.moved) {
+          if (e.cancelable) e.preventDefault();
+          this._root.querySelector(".track").style.transform = `translateX(${drag.base + dx}px)`;
+        }
+      }
+    };
+    const onUp = (e) => {
+      pts.delete(e.pointerId);
+      try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+      const st = this._zoomStateFor(mi);
+      if (pts.size < 2) pinchDist = 0;
+      if (pts.size === 1) {
+        // one finger lifted mid-pinch — let the remaining finger keep
+        // panning instead of going dead until it lifts too; already mid-
+        // gesture, so (unlike a fresh onDown) capture it immediately
+        const [[pid, p]] = pts;
+        try { svg.setPointerCapture(pid); } catch (_) {}
+        panStart = { x: p.x, y: p.y, panX0: st.panX, panY0: st.panY, moved: true, pid };
+        drag = null;
+      } else if (pts.size === 0) {
+        if (drag && drag.moved) {
+          const dx = e.clientX - drag.x, dt = Date.now() - drag.t0, v = Math.abs(dx) / Math.max(dt, 1);
+          this._blockClick = true; clearTimeout(this._bcT); this._bcT = setTimeout(() => (this._blockClick = false), 300);
+          if (Math.abs(dx) > this._w * SWIPE_COMMIT || v > SWIPE_VEL) this._pos += dx < 0 ? 1 : -1;
+          this._setX(true);
+        }
+        panStart = null; drag = null;
+        this._zoomDown = false;
+        // Only snap-reset (and thus touch the svg's transform/transition) when
+        // this gesture actually left scale/pan off their rest values — a plain
+        // click never touched them, so re-applying "scale(1) translate(0,0)"
+        // here was a no-op VALUE-wise most of the time, but the very first
+        // time it ran (transform going from unset to an explicit value) it
+        // was a real change, starting a transition whose transitionend then
+        // bubbled up into the carousel's own track handler and wrongly wiped
+        // room selection (see the track's transitionend listener).
+        if (st.scale <= 1.001 && (st.scale !== 1 || st.panX !== 0 || st.panY !== 0)) {
+          st.scale = 1; st.panX = 0; st.panY = 0; this._applyZoomToPageIndex(mi, true);
+        }
+        this._syncZoomBtn();
+        // a map refresh that arrived mid-gesture was deferred (see _rebuild) —
+        // apply it now that the fingers are up, same as _setupSwipe's own
+        // transitionend flush. Deferred one more tick, past the native
+        // 'click' this same pointerup is about to synthesize — rebuilding
+        // synchronously here would yank the just-tapped .rm out from under
+        // that click (room selection would silently double-toggle: the
+        // stale node's click still fires, then whatever's newly in its place
+        // if the browser re-targets to the live DOM).
+        if (this._pendingRebuild && !this._down) {
+          this._pendingRebuild = false;
+          setTimeout(() => this._buildPages(true), 0);
+        }
+      }
+    };
+
+    svg.addEventListener("pointerdown", onDown);
+    svg.addEventListener("pointermove", onMove);
+    svg.addEventListener("pointerup", onUp);
+    svg.addEventListener("pointercancel", onUp);
+
+    svg.addEventListener("wheel", (e) => {
+      if (!this._enabled("show_zoom") || this._zoneMode) return;
+      const st = this._zoomStateFor(mi);
+      const s0 = st.scale;
+      const s1 = Math.min(this._maxZoom(), Math.max(1, s0 * Math.exp(-e.deltaY * 0.0018)));
+      // Only swallow the wheel when it actually changes the zoom. At scale 1
+      // scrolling down (or at max zoom scrolling up) the page keeps scrolling.
+      if (s1 === s0) return;
+      e.preventDefault();
+      const prect = pg.getBoundingClientRect();
+      const cx = e.clientX - prect.left, cy = e.clientY - prect.top;
+      st.panX = cx + (s1 / s0) * (st.panX - cx);
+      st.panY = cy + (s1 / s0) * (st.panY - cy);
+      st.scale = s1;
+      this._clampPan(st, svg);
+      this._applyZoomToPageIndex(mi, false);
+    }, { passive: false });
+  }
+  _updateZoneTag() {
+    const tag = this._root && this._root.querySelector(".zonetag");
+    if (!tag) return;
+    if (this._zoneRect) {
+      tag.textContent = "Clean this area";
+      tag.classList.add("show", "ready");
+    } else if (this._zoneMode) {
+      tag.textContent = "Drag on the map to draw a zone";
+      tag.classList.add("show");
+      tag.classList.remove("ready");
+    } else {
+      tag.classList.remove("show", "ready");
+    }
+  }
+  _confirmZone() {
+    const r = this._zoneRect;
+    if (!r || !this._enabled("allow_zone_cleaning")) return;
+    this._svc("xiaomi_vac", "clean_zone", {
+      entity_id: this._config.vacuum,
+      zone: [r.x0, r.y0, r.x1, r.y1],
+    });
+    this._toast("Cleaning the selected area");
+    this._zoneRect = null;
+    if (this._zoneMode) this._toggleZone();
   }
 
   /* ---------------- live update ---------------- */
@@ -823,7 +1312,7 @@ class XiaomiVacCard extends HTMLElement {
     const state = this._effState(vac);
     this._root.style.setProperty("--xv-accent", ACCENT[state] || ACCENT.unknown);
 
-    const battEnt = this._st(`sensor.${this._base()}_battery`);
+    const battEnt = this._st(this._batteryEid());
     const batt = battEnt ? Number(battEnt.state) : (vac && vac.attributes.battery_level);
     const hasBatt = batt != null && !Number.isNaN(batt);
     // No charging flag from the device — docked-and-not-full is the charging tell.
@@ -863,6 +1352,7 @@ class XiaomiVacCard extends HTMLElement {
       q(".act-consumables").classList.remove("on");
     }
 
+    this._syncZoneBtn();
     this._updateAnim(state, vac && vac.attributes.model);
   }
 }
@@ -880,6 +1370,7 @@ class XiaomiVacCardEditor extends HTMLElement {
         ({
           vacuum: "Vacuum",
           map: "Map camera",
+          battery: "Battery sensor entity",
           fan: "Fan speed select entity",
           water: "Water level select entity",
           activeMap: "Active map select entity",
@@ -891,7 +1382,10 @@ class XiaomiVacCardEditor extends HTMLElement {
           show_active_map: "Show active map control",
           show_room_labels: "Show room labels",
           allow_room_cleaning: "Allow room cleaning",
+          allow_zone_cleaning: "Allow zone (area) cleaning",
           show_consumables: "Show consumable status button",
+          show_zoom: "Allow pinch/wheel zoom on the map",
+          max_zoom: "Maximum zoom level",
         }[s.name] || s.name);
       this._form.addEventListener("value-changed", (e) =>
         this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: e.detail.value }, bubbles: true, composed: true })));
@@ -902,6 +1396,7 @@ class XiaomiVacCardEditor extends HTMLElement {
     this._form.schema = [
       { name: "vacuum", required: true, selector: { entity: { domain: "vacuum" } } },
       { name: "map", selector: { entity: { domain: "camera" } } },
+      { name: "battery", selector: { entity: { domain: "sensor" } } },
       { name: "fan", selector: { entity: { domain: "select" } } },
       { name: "water", selector: { entity: { domain: "select" } } },
       { name: "activeMap", selector: { entity: { domain: "select" } } },
@@ -913,7 +1408,10 @@ class XiaomiVacCardEditor extends HTMLElement {
       { name: "show_active_map", selector: { boolean: {} } },
       { name: "show_room_labels", selector: { boolean: {} } },
       { name: "allow_room_cleaning", selector: { boolean: {} } },
+      { name: "allow_zone_cleaning", selector: { boolean: {} } },
       { name: "show_consumables", selector: { boolean: {} } },
+      { name: "show_zoom", selector: { boolean: {} } },
+      { name: "max_zoom", selector: { number: { mode: "box", min: 1.5, max: 20, step: 0.5 } } },
     ];
   }
 }

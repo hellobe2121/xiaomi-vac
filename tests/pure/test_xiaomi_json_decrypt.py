@@ -52,6 +52,7 @@ def _encrypt_like_the_real_app(payload: dict, *, model: str, device_id: str) -> 
 @pytest.mark.parametrize("model", [
     "xiaomi.vacuum.ov42gl",   # 21 chars, the model that motivated this fix
     "xiaomi.vacuum.ov21gl",   # 21 chars, an already-"working" (never actually tested) profile
+    "xiaomi.vacuum.ov31gl",   # same JSON-map family as ov21gl; ensures alias remains valid
     "1234567890123456",       # exactly 16 chars: slice(-16) is a no-op
 ])
 def test_decrypt_round_trip(model):
@@ -79,6 +80,12 @@ def test_decrypt_rejects_wrong_version():
     envelope = json.dumps({"version": 1, "data": "irrelevant"}).encode("utf-8")
     with pytest.raises(ValueError, match="unsupported xiaomi map blob version"):
         decrypt_xiaomi_json_map(envelope, "xiaomi.vacuum.ov42gl", "1234567890")
+
+
+def test_decrypt_reads_base64_zlib_blob_without_envelope():
+    text = json.dumps({"map_id": 7, "height": 2, "width": 3})
+    blob = base64.b64encode(zlib.compress(text.encode("utf-8")))
+    assert decrypt_xiaomi_json_map(blob, "xiaomi.vacuum.c107", "1234567890") == text
 
 
 def test_decrypt_rejects_non_json_input():

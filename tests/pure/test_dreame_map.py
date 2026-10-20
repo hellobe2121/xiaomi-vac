@@ -60,6 +60,9 @@ class FakeCloud:
         self.blob = blob
         self.prop_calls = 0
 
+    def get_user_device_data(self, server, did, siid, piid, limit=2, time_start=0):
+        return None
+
     def cloud_get_prop(self, server, did, siid, piid):
         self.prop_calls += 1
         assert (siid, piid) == (6, 3)

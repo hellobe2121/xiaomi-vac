@@ -18,15 +18,17 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
+from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 
-from .captcha_view import IMG_URL, ensure_registered, set_image
-from .cloud.connector import XiaomiCloud
+from .captcha_view import IMG_URL, ensure_registered, remove_image, set_image
+from .cloud.connector import CloudUnreachable, XiaomiCloud
 from .cloud.oauth import (
     OAUTH_REDIRECT_URI,
     XiaomiOAuthError,
     build_authorize_url,
     exchange_code,
+    extract_oauth_code,
     generate_oauth_device_id,
     oauth_entry_updates,
     resolve_region_from_code,
@@ -37,6 +39,7 @@ from .const import (
     CONF_MAC,
     CONF_MODEL,
     CONF_OAUTH_DEVICE_ID,
+    CONF_OWNER_UID,
     CONF_PASS_TOKEN,
     CONF_PASSWORD,
     CONF_SERVER,
@@ -49,7 +52,7 @@ from .const import (
     DOMAIN,
 )
 from .device import IjaiVacuumDevice
-from .oauth_flow import OAuthCodeLink
+from .oauth_flow import OAuthCodeLink, browser_on_oauth_redirect
 from .spec.registry import is_supported
 
 _LOGGER = logging.getLogger(__name__)
@@ -225,6 +228,56 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    # --- reconfigure: refresh host, token and server from the cloud -----
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Re-run discovery for a cloud entry and update its host, token and server."""
+        entry = self._get_reconfigure_entry()
+        data = entry.data
+        if not data.get(CONF_SERVER):
+            return self.async_abort(reason="reconfigure_local_only")
+        if user_input is None:
+            return self.async_show_form(step_id="reconfigure")
+
+        cloud = XiaomiCloud(str(data[CONF_USERNAME]))
+        cloud.restore_session(
+            data[CONF_USER_ID],
+            data[CONF_SSECURITY],
+            data[CONF_SERVICE_TOKEN],
+            data.get(CONF_PASS_TOKEN),
+        )
+        vacuums = await self.hass.async_add_executor_job(
+            cloud.list_vacuums, data[CONF_SERVER]
+        )
+        if not any(r["answered"] for r in cloud.discovery_record):
+            try:
+                renewed = await self.hass.async_add_executor_job(cloud.refresh)
+            except CloudUnreachable:
+                return self.async_abort(reason="no_server_response")
+            if not renewed:
+                return self.async_abort(reason="reconfigure_reauth_required")
+            vacuums = await self.hass.async_add_executor_job(
+                cloud.list_vacuums, data[CONF_SERVER]
+            )
+            if not any(r["answered"] for r in cloud.discovery_record):
+                return self.async_abort(reason="no_server_response")
+
+        found = next(
+            (v for v in vacuums if str(v["did"]) == str(data[CONF_DEVICE_ID])), None
+        )
+        if found is None:
+            return self.async_abort(reason="reconfigure_device_not_found")
+        return self.async_update_reload_and_abort(
+            entry,
+            data_updates={
+                CONF_HOST: found["localip"],
+                CONF_TOKEN: found["token"],
+                CONF_SERVER: found["server"],
+                CONF_OWNER_UID: found["owner_uid"],
+            },
+        )
+
     # --- email + password -----------------------------------------------
     async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
@@ -246,13 +299,21 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             return await self._branch(state)
         ensure_registered(self.hass)
-        set_image(self.hass, "captcha", self._cloud.captcha_image)
+        set_image(self.hass, self._captcha_key, self._cloud.captcha_image)
         self._cap_n += 1
         return self.async_show_form(
             step_id="captcha",
             data_schema=CODE_SCHEMA,
-            description_placeholders={"captcha_url": f"{IMG_URL}?n=captcha&t={self._cap_n}"},
+            description_placeholders={"captcha_url": f"{IMG_URL}?n={self._captcha_key}&t={self._cap_n}"},
         )
+
+    @property
+    def _captcha_key(self) -> str:
+        return f"captcha_{self.flow_id}"
+
+    @callback
+    def async_remove(self) -> None:
+        remove_image(self.hass, self._captcha_key)
 
     async def async_step_twofa(
         self, user_input: dict[str, Any] | None = None
@@ -273,16 +334,25 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
             if self.source == SOURCE_REAUTH:
                 return self._finish_reauth()
             return await self.async_step_devices()
-        # 登录验证失败 = Xiaomi blocked the sign-in pending account verification,
-        # not bad credentials. Point the user at Xiaomi's own sign-in first.
+        # 70016 (desc 登录验证失败) is Xiaomi's wrong-credentials reply: let them retype.
+        if getattr(self._cloud, "login_code", None) == 70016:
+            return self._show_credentials_form({"base": "invalid_auth"})
         reason_text = getattr(self._cloud, "login_error", "")
         if not isinstance(reason_text, str):
             reason_text = ""
-        if "登录验证失败" in reason_text:
-            return self.async_abort(reason="login_verification_required")
         return self.async_abort(
             reason="login_failed",
             description_placeholders={"reason": reason_text or "unknown"},
+        )
+
+    def _show_credentials_form(self, errors: dict[str, str]) -> ConfigFlowResult:
+        step_id = "reauth_confirm" if self.source == SOURCE_REAUTH else "credentials"
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                CRED_SCHEMA, {CONF_USERNAME: self._data.get(CONF_USERNAME, "")}
+            ),
+            errors=errors,
         )
 
     # --- device discovery + pick ----------------------------------------
@@ -295,7 +365,18 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._devices = [d for d in all_vacuums if is_supported(d["model"])]
             if not self._devices:
-                reason = "no_devices" if not all_vacuums else "unsupported_model"
+                record = self._cloud.discovery_record
+                if all_vacuums:
+                    return self.async_abort(
+                        reason="unsupported_model",
+                        description_placeholders={
+                            "model": ", ".join(sorted({d["model"] for d in all_vacuums}))
+                        },
+                    )
+                if record and not any(r["answered"] for r in record):
+                    reason = "no_server_response"
+                else:
+                    reason = "no_devices"
                 return self.async_abort(reason=reason)
         if len(self._devices) == 1:
             self._selected = self._devices[0]
@@ -315,7 +396,9 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
         d = self._selected
         cloud = self._cloud
         if not is_supported(d["model"]):
-            return self.async_abort(reason="unsupported_model")
+            return self.async_abort(
+                reason="unsupported_model", description_placeholders={"model": d["model"]}
+            )
 
         wifi_sn = await self.hass.async_add_executor_job(
             self._get_wifi_sn, d["localip"], d["token"], d["model"], cloud.user_id
@@ -331,6 +414,7 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_MAC: d["mac"],
                 CONF_SERVER: d["server"],
                 CONF_USER_ID: str(cloud.user_id),
+                CONF_OWNER_UID: d["owner_uid"],
                 CONF_DEVICE_ID: str(d["did"]),
                 CONF_SSECURITY: cloud.ssecurity,
                 CONF_SERVICE_TOKEN: cloud.service_token,
@@ -347,10 +431,21 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
         """Offer optional MIoT OAuth for future MQTT live-map support."""
         if user_input is not None:
             if user_input["enable_miot_oauth"]:
-                return await self.async_step_miot_oauth_auth()
+                return await self.async_step_miot_oauth_method()
             return self._create_entry()
         return self.async_show_form(
             step_id="miot_oauth", data_schema=OAUTH_CHOICE_SCHEMA
+        )
+
+    async def async_step_miot_oauth_method(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Link automatically on homeassistant.local:8123; otherwise ask."""
+        if browser_on_oauth_redirect():
+            return await self.async_step_miot_oauth_auth()
+        return self.async_show_menu(
+            step_id="miot_oauth_method",
+            menu_options=["miot_oauth_auth", "miot_oauth_code"],
         )
 
     async def async_step_miot_oauth_auth(
@@ -414,7 +509,7 @@ class XiaomiVacuumConfigFlow(ConfigFlow, domain=DOMAIN):
             self._data.setdefault(CONF_OAUTH_DEVICE_ID, generate_oauth_device_id())
         )
         if user_input is not None:
-            code = user_input["code"].strip()
+            code = extract_oauth_code(user_input["code"])
             try:
                 self._data.update(
                     await _async_exchange_manual_oauth(
@@ -471,7 +566,18 @@ class XiaomiVacuumOptionsFlow(OptionsFlow):
         # OAuth needs a cloud session (server/user); local-only entries can't.
         if not self.config_entry.data.get(CONF_SERVER):
             return self.async_abort(reason="oauth_local_only")
-        return await self.async_step_miot_oauth_auth()
+        return await self.async_step_miot_oauth_method()
+
+    async def async_step_miot_oauth_method(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Link automatically on homeassistant.local:8123; otherwise ask."""
+        if browser_on_oauth_redirect():
+            return await self.async_step_miot_oauth_auth()
+        return self.async_show_menu(
+            step_id="miot_oauth_method",
+            menu_options=["miot_oauth_auth", "miot_oauth_code"],
+        )
 
     async def async_step_miot_oauth_auth(
         self, user_input: dict[str, Any] | None = None
@@ -545,7 +651,7 @@ class XiaomiVacuumOptionsFlow(OptionsFlow):
             )
         device_id = self._oauth_device_id
         if user_input is not None:
-            code = user_input["code"].strip()
+            code = extract_oauth_code(user_input["code"])
             try:
                 data.update(
                     await _async_exchange_manual_oauth(

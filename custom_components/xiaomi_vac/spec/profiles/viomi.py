@@ -296,6 +296,7 @@ VIOMI_V15_CORE = CoreCapability(
     battery=Prop(3, 1),  # battery-level — "Battery Level"
     fan_speed=Prop(4, 17),  # suction-grade — "Suction Power"
     water_level=Prop(4, 18),  # water-grade — "Water Output Level"
+    repeat=Prop(4, 1),  # repeat-state — "Second Cleaning Switch"
     start=Action(2, 1),  # start-sweep — "Start Work"
     stop=Action(2, 2),  # stop-sweeping — "Stop Work"
     pause=Action(2, 3),  # pause — "Pause Work"

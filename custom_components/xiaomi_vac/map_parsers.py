@@ -145,11 +145,96 @@ def overlay_units_per_metre(brand: str) -> float:
     return 1000.0 if brand == "xiaomi" else 1.0
 
 
+# Model suffixes the installed vacuum_map_parser_ijai does not list as hex-key
+# models but which decrypt only with the hex-style key. Each is an alias of a
+# profile whose base model IS in the upstream list (b106bk -> b106eu,
+# d106gl -> c101eu), see spec/registry.py.
+_IJAI_EXTRA_HEX_KEY_MODELS = frozenset({"b106bk", "d106gl"})
+
+
+def _patch_ijai_hex_key_models() -> None:
+    """Teach vacuum_map_parser_ijai the hex-key aliases it does not know about."""
+    from vacuum_map_parser_ijai import aes_decryptor
+
+    original = aes_decryptor.is_EncryptKeyTypeHex_model
+    if getattr(original, "_xiaomi_vac_patched", False):
+        return
+
+    def patched(model: str) -> bool:
+        return model.split(".")[-1].lower() in _IJAI_EXTRA_HEX_KEY_MODELS or original(model)
+
+    patched._xiaomi_vac_patched = True
+    aes_decryptor.is_EncryptKeyTypeHex_model = patched
+
+
+def ijai_hex_key_first(model: str) -> bool:
+    """Whether the hex-style key is the first one to try for this ijai model.
+
+    @param model: full model string, e.g. "xiaomi.vacuum.d106gl".
+    @returns: True when upstream or our alias list marks it as a hex-key model.
+    """
+    from vacuum_map_parser_ijai import status_mapping
+
+    suffix = model.split(".")[-1].lower()
+    return suffix in _IJAI_EXTRA_HEX_KEY_MODELS or status_mapping.is_EncryptKeyTypeHex_model(model)
+
+
+def ijai_decrypt(
+    raw: bytes, *, wifi_sn: str, owner_id: str, device_id: str, model: str,
+    device_mac: str, hex_key: bool,
+) -> bytes:
+    """Decrypt and decompress one ijai cloud blob with an explicit key type.
+
+    @param raw: the downloaded blob, base64 or already binary.
+    @param hex_key: True for the 32-char hex key, False for the 16-char middle slice.
+    @returns: the decompressed RobotMap protobuf bytes.
+    """
+    import binascii
+
+    from Crypto.Hash import MD5
+    from vacuum_map_parser_ijai import aes_decryptor
+
+    try:
+        raw = base64.b64decode(raw, validate=True)
+    except binascii.Error:
+        pass
+    mac_part = "".join(device_mac.lower().split(":"))
+    suffix = model.split(".")[-1]
+    if len(suffix) == 2:
+        suffix = "00" + suffix
+    elif len(suffix) == 3:
+        suffix = "0" + suffix
+    elif len(suffix) > 4:
+        suffix = suffix[-4:]
+    aeskey = aes_decryptor.aes_encrypt("+".join([wifi_sn, owner_id, device_id]), mac_part + suffix)
+    digest = MD5.new(aeskey.encode("utf-8")).hexdigest()
+    key = digest if hex_key else digest[8:-8].upper()
+    return zlib.decompress(aes_decryptor.aes_decrypt(raw, key, hex_key))
+
+
+def ijai_unpack_any_key(raw: bytes, **kw) -> tuple[bytes, str]:
+    """Decrypt an ijai blob trying the likely key type first, then the other.
+
+    @param raw: the downloaded blob.
+    @param kw: wifi_sn, owner_id, device_id, model, device_mac.
+    @returns: (unpacked bytes, key type that worked: "hex" or "text").
+    """
+    first = ijai_hex_key_first(kw["model"])
+    errors = []
+    for hex_key in (first, not first):
+        try:
+            return ijai_decrypt(raw, hex_key=hex_key, **kw), ("hex" if hex_key else "text")
+        except Exception as ex:  # noqa: BLE001
+            errors.append(ex)
+    raise errors[0]
+
+
 def make_parser(brand: str, model: str, palette, sizes, drawables, image_config, texts):
     """Construct the parser for ``brand`` (lazy import). Raises ValueError for an
     unknown brand, ImportError if the brand's dep isn't installed."""
     if brand == "ijai":
         from vacuum_map_parser_ijai.map_data_parser import IjaiMapDataParser
+        _patch_ijai_hex_key_models()
         return IjaiMapDataParser(palette, sizes, drawables, image_config, texts)
     if brand == "xiaomi":
         from vacuum_map_parser_xiaomi.map_data_parser import XiaomiMapDataParser

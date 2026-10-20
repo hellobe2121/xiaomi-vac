@@ -9,6 +9,7 @@ from dataclasses import replace
 
 from ..types import (
     Action,
+    BaseStationCapability,
     CleanHistoryCapability,
     ConsumablesCapability,
     CoreCapability,
@@ -22,6 +23,7 @@ from ..types import (
     ScheduleCapability,
     SettingsCapability,
     VoiceCapability,
+    ZoneSweepCapability,
 )
 
 
@@ -96,24 +98,35 @@ XIAOMI_CORE_B112 = CoreCapability(
     sweep_types={'global': 0, 'edge': 2, 'point': 4, 'remote': 5},
 )
 
-# c102cn/c102gl/d103cn — lean core (no fan/water/sweep value tables in spec).
+# c102cn/c102gl — fan speed is siid 2 `mode`, water level is vacuum-extend mop-mode.
 XIAOMI_CORE_C102CN = CoreCapability(
     status=Prop(2, 1),
     fault=Prop(2, 2),
-    mode=Prop(2, 3),
+    fan_speed=Prop(2, 3),
+    water_level=Prop(4, 5),
     battery=Prop(3, 1),
     start=Action(2, 1),
     stop=Action(2, 2),
     charge=Action(3, 1),
-    status_map={1: 'idle', 2: 'paused', 3: 'returning', 4: 'docked', 5: 'cleaning', 6: 'cleaning', 7: 'cleaning', 8: 'idle'},
-    modes={'silent': 0, 'basic': 1, 'strong': 2, 'full_speed': 3},
+    locate=Action(7, 1),
+    status_map={1: 'cleaning', 2: 'idle', 3: 'paused', 4: 'error', 5: 'returning', 6: 'docked', 7: 'cleaning', 8: 'docked', 9: 'docked', 10: 'returning', 11: 'cleaning', 12: 'cleaning', 13: 'docked', 14: 'idle', 19: 'idle', 21: 'paused', 22: 'docked', 23: 'cleaning'},
+    fan_speeds={'silent': 0, 'basic': 1, 'strong': 2, 'full_speed': 3},
+    water_levels={'low': 1, 'medium': 2, 'high': 3},
 )
 
-# b108gl — mode/sweep on siid 2 (different slots than the b/c-engine).
+# d103cn — c102cn's core plus status 30 SelfStationClean.
+XIAOMI_CORE_D103CN = replace(
+    XIAOMI_CORE_C102CN,
+    status_map={1: 'cleaning', 2: 'idle', 3: 'paused', 4: 'error', 5: 'returning', 6: 'docked', 7: 'cleaning', 8: 'docked', 9: 'docked', 10: 'returning', 11: 'cleaning', 12: 'cleaning', 13: 'docked', 14: 'idle', 19: 'idle', 21: 'paused', 22: 'docked', 23: 'cleaning', 30: 'docked'},
+)
+
+# b108gl — sweep-mop-type 2/3, suction-level 2/8, mop-water-output-level 2/9.
 XIAOMI_CORE_B108GL = CoreCapability(
     status=Prop(2, 1),
     fault=Prop(2, 2),
-    mode=Prop(2, 16),
+    mode=Prop(2, 3),
+    fan_speed=Prop(2, 8),
+    water_level=Prop(2, 9),
     battery=Prop(3, 1),
     sweep_type=Prop(2, 4),
     alarm=Prop(4, 1),
@@ -121,8 +134,10 @@ XIAOMI_CORE_B108GL = CoreCapability(
     start=Action(2, 1),
     stop=Action(2, 2),
     charge=Action(3, 1),
-    status_map={1: 'idle', 2: 'paused', 3: 'returning', 4: 'docked', 5: 'cleaning', 6: 'cleaning', 7: 'cleaning', 8: 'idle'},
-    modes={'silent': 1, 'basic': 2, 'strong': 3},
+    status_map={1: 'idle', 2: 'docked', 3: 'docked', 4: 'cleaning', 5: 'paused', 6: 'returning', 7: 'cleaning', 8: 'docked', 9: 'cleaning', 10: 'idle'},
+    fan_speeds={'silent': 1, 'basic': 2, 'strong': 3, 'full_speed': 4},
+    water_levels={'off': 0, 'level1': 1, 'level2': 2, 'level3': 3},
+    modes={'sweep': 1, 'mop': 2, 'sweep_mop': 3, 'sweep_before_mopping': 4},
     sweep_types={'global': 1, 'maping': 5, 'gocharging': 6, 'remotecontrol': 7, 'selectroom': 8, 'customclean': 9, 'area': 4},
 )
 
@@ -130,15 +145,20 @@ XIAOMI_CORE_B108GL = CoreCapability(
 XIAOMI_CORE_D110CH = CoreCapability(
     status=Prop(2, 1),
     fault=Prop(2, 2),
-    mode=Prop(2, 3),
+    mode=Prop(2, 6),
+    fan_speed=Prop(2, 3),
+    water_level=Prop(2, 8),
     battery=Prop(3, 1),
     alarm=Prop(22, 1),
     volume=Prop(22, 2),
     start=Action(2, 1),
     stop=Action(2, 2),
     charge=Action(3, 1),
-    status_map={1: 'idle', 2: 'paused', 3: 'returning', 4: 'docked', 5: 'cleaning', 6: 'cleaning', 7: 'cleaning', 8: 'idle'},
-    modes={'silent': 0, 'basic': 1, 'strong': 2, 'full_speed': 3},
+    locate=Action(23, 1),
+    status_map={1: 'cleaning', 2: 'idle', 3: 'paused', 4: 'error', 5: 'returning', 6: 'docked', 7: 'cleaning', 8: 'docked', 9: 'docked', 10: 'returning', 11: 'cleaning', 12: 'cleaning', 13: 'docked', 14: 'idle', 19: 'idle', 21: 'paused', 22: 'docked', 23: 'cleaning', 30: 'docked'},
+    fan_speeds={'silent': 0, 'basic': 1, 'strong': 2, 'full_speed': 3},
+    water_levels={'level1': 1, 'level2': 2, 'level3': 3},
+    modes={'sweep': 1, 'mop': 2, 'sweep_mop': 3, 'sweep_before_mopping': 4},
 )
 
 
@@ -282,6 +302,10 @@ XIAOMI_B108GL = ModelProfile(
     brand='xiaomi',
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-b108gl:1",),
     core=XIAOMI_CORE_B108GL,
+    room_clean=RoomCleanCapability(
+        room_ids=Prop(2, 13),
+        start=Action(2, 13, in_piid=13),
+    ),
     voice=VoiceCapability(
         service=14,
         download_voice=Action(14, 1, in_piids=(1, 5, 6)),
@@ -668,7 +692,7 @@ XIAOMI_C101EU = ModelProfile(
     ),
 )
 
-# xiaomi.vacuum.c102cn, xiaomi.vacuum.c102gl, xiaomi.vacuum.d103cn, xiaomi.vacuum.d110ch
+# xiaomi.vacuum.c102cn, xiaomi.vacuum.c102gl
 XIAOMI_C102CN = ModelProfile(
     profile_id='xiaomi.c102cn',
     brand='xiaomi',
@@ -678,6 +702,14 @@ XIAOMI_C102CN = ModelProfile(
         room_ids=Prop(2, 4),
         start=Action(2, 3, in_piid=4),
     ),
+)
+
+# xiaomi.vacuum.d103cn — C102CN's layout with status 30 SelfStationClean.
+XIAOMI_D103CN = replace(
+    XIAOMI_C102CN,
+    profile_id='xiaomi.d103cn',
+    core=XIAOMI_CORE_D103CN,
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-d103cn:1",),
 )
 
 # xiaomi.vacuum.c104
@@ -899,12 +931,47 @@ XIAOMI_OV21GL = ModelProfile(
         room_ids=Prop(2, 15),
         start=Action(2, 16, in_piid=15),
     ),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
     consumables=DreameConsumablesCapability(
         main_brush_life=Prop(12, 1), main_brush_left_time=Prop(12, 2),
         side_brush_life=Prop(13, 1), side_brush_left_time=Prop(13, 2),
         filter_life=Prop(14, 1), filter_left_time=Prop(14, 2),
         mop_life=Prop(9, 1), mop_left_time=Prop(9, 2),
         dust_bag_life=Prop(19, 1), dust_bag_left_time=Prop(19, 2),
+    ),
+)
+
+XIAOMI_CORE_OV31GL = replace(
+    XIAOMI_CORE_OV21GL,
+    sweep_type=None,
+    sweep_types={},
+)
+
+XIAOMI_OV31GL = replace(
+    XIAOMI_OV21GL,
+    profile_id="xiaomi.ov31gl",
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov31gl:1",),
+    core=XIAOMI_CORE_OV31GL,
+    max_properties=5,
+    zone_sweep=None,
+    room_clean=RoomCleanCapability(
+        room_ids=Prop(2, 15),
+        start=Action(2, 16, in_piid=15, named_inputs=True),
+    ),
+    consumables=None,
+    base_station=BaseStationCapability(
+        working_status=Prop(2, 18),
+        drying_time=Prop(2, 31),
+        drying_times={"2_hours": 1, "3_hours": 2, "4_hours": 3},
+        auto_mop_dry=Prop(2, 34),
+        drying_progress=Prop(2, 88),
+        dry_left_time=Prop(2, 90),
+        sewage_tank_status=Prop(2, 97),
+        water_tank_status=Prop(2, 98),
+        start_drying=Action(2, 20),
+        stop_drying=Action(2, 32),
+        start_mop_wash=Action(2, 19),
+        empty_dust_bin=Action(2, 18),
     ),
 )
 
@@ -915,6 +982,7 @@ XIAOMI_OV71GL = replace(
     XIAOMI_OV21GL,
     profile_id='xiaomi.ov71gl',
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov71gl:1",),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
     consumables=None,
 )
 
@@ -924,6 +992,61 @@ XIAOMI_OV43GB = replace(
     XIAOMI_OV21GL,
     profile_id='xiaomi.ov43gb',
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov43gb:2",),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
+    consumables=None,
+)
+
+# xiaomi.vacuum.ov51gl (Xiaomi Robot Vacuum H40) — every wired siid/piid/aiid
+# and value table matches ov21gl in the public spec; consumables unverified
+# (see ov71gl note above).
+# Consumables (2026-10-14): ov51gl spec has the same mop(9), brushes(12/13),
+# filter(14) and dust-bag(19) services as ov21gl, and an H40 owner reads all
+# five via MIoT (#39), so the ov21gl block is inherited.
+XIAOMI_OV51GL = replace(
+    XIAOMI_OV21GL,
+    profile_id='xiaomi.ov51gl',
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov51gl:1",),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
+)
+
+# xiaomi.vacuum.e101gb — every wired siid/piid/aiid and value table matches
+# ov21gl in the public spec (urn ...:xiaomi-e101gb:1 vs ...:xiaomi-ov21gl:2,
+# compared property by property); consumables unverified (see ov71gl note above).
+# Its cloud map is the xiaomi JSON format (already routed in map_parsers.py).
+XIAOMI_E101GB = replace(
+    XIAOMI_OV21GL,
+    profile_id='xiaomi.e101gb',
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-e101gb:1",),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
+    consumables=None,
+)
+
+# xiaomi.vacuum.ov21cn (Mijia 5 Pro) — every wired siid/piid/aiid and value table
+# matches ov21gl in the public spec; consumables unverified (see ov71gl note above).
+XIAOMI_OV21CN = replace(
+    XIAOMI_OV21GL,
+    profile_id='xiaomi.ov21cn',
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov21cn:2",),
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
+    consumables=None,
+)
+
+# xiaomi.vacuum.pv21cn (Mijia Robot Vacuum 6 Pro) — same wired siid/piid/aiid
+# as ov21gl, but siid 2 piid 4 (sweep-mop-type) has no "Mop" (2) value, and
+# siid 2 piid 2 (status) adds 25 SelfChecking and 26 Summoning.
+# Consumables unverified (see ov71gl note above).
+XIAOMI_CORE_PV21CN = replace(
+    XIAOMI_CORE_OV21GL,
+    status_map={**XIAOMI_CORE_OV21GL.status_map, 25: 'idle', 26: 'cleaning'},
+    modes={'sweep': 1, 'sweep_mop': 3, 'sweep_before_mopping': 4},
+)
+
+XIAOMI_PV21CN = replace(
+    XIAOMI_OV21GL,
+    profile_id='xiaomi.pv21cn',
+    notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-pv21cn:1",),
+    core=XIAOMI_CORE_PV21CN,
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
     consumables=None,
 )
 
@@ -939,6 +1062,7 @@ XIAOMI_OV42GL = replace(
     XIAOMI_OV21GL,
     profile_id='xiaomi.ov42gl',
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-ov42gl:2",),
+    zone_sweep=None,
     # Consumables (2026-08-01): read straight off the live device's own cached
     # MIoT spec (.storage/xiaomi_home/miot_specs/...xiaomi-ov42gl:1_en.dict),
     # hardware-confirmed for THIS model — not extended to ov71gl/ov43gb (only
@@ -979,6 +1103,7 @@ XIAOMI_C107 = replace(
     profile_id='xiaomi.c107',
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-c107:2",),
     core=XIAOMI_CORE_C107,
+    zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
     consumables=None,
 )
 

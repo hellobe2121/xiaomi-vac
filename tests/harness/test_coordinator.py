@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -14,6 +15,7 @@ from custom_components.xiaomi_vac.const import (
     CONF_DEVICE_ID,
     CONF_MAC,
     CONF_MODEL,
+    CONF_OWNER_UID,
     CONF_PASS_TOKEN,
     CONF_PASSWORD,
     CONF_SERVER,
@@ -23,11 +25,13 @@ from custom_components.xiaomi_vac.const import (
     CONF_USERNAME,
     CONF_WIFI_SN,
 )
+from custom_components.xiaomi_vac.cloud.connector import CloudUnreachable
 from custom_components.xiaomi_vac.coordinator import XiaomiVacuumCoordinator
 from custom_components.xiaomi_vac.device import DeviceCommunicationError
 from custom_components.xiaomi_vac.map import MapResult, SessionExpired
 from custom_components.xiaomi_vac.cloud.mqtt import MqttMessage
 from custom_components.xiaomi_vac.map_coordinator import XiaomiMapCoordinator
+from custom_components.xiaomi_vac.spec.types import Action
 
 
 def _fake_result(map_id: int = 1, content_hash: str = "hash-a") -> MapResult:
@@ -201,6 +205,92 @@ async def test_map_coordinator_persists_live_wifi_sn_and_mac(
     assert updated[CONF_MAC] == "AA:BB:CC:DD:EE:FF"
 
 
+@pytest.mark.parametrize(
+    ("stored_owner_uid", "expected_owner_id"),
+    [("7777777777", "7777777777"), (None, "12345"), ("", "12345")],
+)
+async def test_map_coordinator_map_key_owner_is_device_owner_else_logged_in_user(
+    hass: HomeAssistant,
+    stored_owner_uid: str | None,
+    expected_owner_id: str,
+) -> None:
+    """The fetcher gets the stored device owner uid, or the logged-in user_id without one."""
+    entry = _map_entry("ijai.vacuum.v17")
+    if stored_owner_uid is not None:
+        entry.data[CONF_OWNER_UID] = stored_owner_uid
+    device = MagicMock()
+    device.profile = SimpleNamespace(brand="ijai", profile_id="ijai.v17", map=None)
+    device.get_wifi_sn.return_value = "A" * 18
+    device.get_mac.return_value = "AA:BB:CC:DD:EE:FF"
+    device.get_reported_owner_uid.return_value = None
+    control = MagicMock()
+    control.data = None
+    coord = XiaomiMapCoordinator(hass, entry, device, control)
+
+    with (
+        patch("custom_components.xiaomi_vac.map_coordinator.XiaomiCloud"),
+        patch("custom_components.xiaomi_vac.map_coordinator.MapFetcher") as fetcher,
+    ):
+        coord._build()
+
+    assert fetcher.call_args.kwargs["user_id"] == expected_owner_id
+
+
+async def test_map_coordinator_map_key_owner_prefers_uid_the_vacuum_reports(
+    hass: HomeAssistant,
+) -> None:
+    """The uid from siid 7/piid 45 wins over the stored owner uid and the login."""
+    entry = _map_entry("ijai.vacuum.v17")
+    entry.data[CONF_OWNER_UID] = "7777777777"
+    device = MagicMock()
+    device.profile = SimpleNamespace(brand="ijai", profile_id="ijai.v17", map=None)
+    device.get_wifi_sn.return_value = "A" * 18
+    device.get_mac.return_value = "AA:BB:CC:DD:EE:FF"
+    device.get_reported_owner_uid.return_value = "9999999999"
+    control = MagicMock()
+    control.data = None
+    coord = XiaomiMapCoordinator(hass, entry, device, control)
+
+    with (
+        patch("custom_components.xiaomi_vac.map_coordinator.XiaomiCloud"),
+        patch("custom_components.xiaomi_vac.map_coordinator.MapFetcher") as fetcher,
+    ):
+        coord._build()
+
+    assert fetcher.call_args.kwargs["user_id"] == "9999999999"
+
+
+@pytest.mark.parametrize(
+    ("brand", "stored_owner_uid", "expected_source", "expected_matches"),
+    [
+        ("ijai", "7777777777", "owner_uid", False),
+        ("ijai", "12345", "owner_uid", True),
+        ("ijai", None, "user_id", None),
+        ("ijai", "", "user_id", None),
+        ("dreame", "7777777777", None, None),
+    ],
+)
+async def test_cycle_record_names_the_map_key_owner_source_without_ids(
+    hass: HomeAssistant,
+    brand: str,
+    stored_owner_uid: str | None,
+    expected_source: str | None,
+    expected_matches: bool | None,
+) -> None:
+    """The record says which id fed the ijai map key and whether the two ids match, never the ids."""
+    coord = _map_coord(hass, f"{brand}.vacuum.x1")
+    coord._device.profile = SimpleNamespace(brand=brand, profile_id=f"{brand}.x1", map=None)
+    if stored_owner_uid is not None:
+        coord.entry.data[CONF_OWNER_UID] = stored_owner_uid
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["map_key_owner_source"] == expected_source
+    assert record["map_key_owner_matches_user_id"] is expected_matches
+    assert "7777777777" not in str(record)
+    assert "12345" not in str(record)
+
+
 async def test_map_coordinator_never_overwrites_stored_keys_with_blank_live_reads(
     hass: HomeAssistant,
 ) -> None:
@@ -227,6 +317,32 @@ async def test_map_coordinator_never_overwrites_stored_keys_with_blank_live_read
     assert fetcher.call_args.kwargs["wifi_sn"] == "B" * 18
     assert fetcher.call_args.kwargs["mac"] == "11:22:33:44:55:66"
     update.assert_not_called()
+
+
+async def test_map_coordinator_build_logs_map_key_inputs_without_identifiers(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The map-key debug line says which inputs are present and prints none of their values."""
+    entry = _map_entry("ijai.vacuum.v17")
+    device = MagicMock()
+    device.profile = SimpleNamespace(brand="ijai", profile_id="ijai.v17", map=None)
+    device.get_wifi_sn.return_value = "SNSECRET0123456789"
+    device.get_mac.return_value = "AA:BB:CC:DD:EE:FF"
+    control = MagicMock()
+    control.data = None
+    coord = XiaomiMapCoordinator(hass, entry, device, control)
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="custom_components.xiaomi_vac.map_coordinator"),
+        patch("custom_components.xiaomi_vac.map_coordinator.XiaomiCloud"),
+        patch("custom_components.xiaomi_vac.map_coordinator.MapFetcher"),
+    ):
+        coord._build()
+
+    assert "wifi_sn=set mac=set user_id=set device_id=set" in caplog.text
+    for secret in ("SNSECRET0123456789", "AA:BB:CC:DD:EE:FF", "12345", "did123"):
+        assert secret not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +411,53 @@ async def test_map_coordinator_session_expiry_refresh_fails_raises_auth_failed(
         patch.object(coord, "_refresh_and_persist", new=AsyncMock(return_value=False)),
         patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
         pytest.raises(ConfigEntryAuthFailed),
+    ):
+        await coord._async_update_data()
+
+
+async def test_map_coordinator_unreachable_cloud_raises_update_failed_not_reauth(
+    hass: HomeAssistant,
+) -> None:
+    """A map URL timeout is a network problem, not an expired session."""
+    coord = _map_coord(hass)
+
+    fetcher = MagicMock()
+    fetcher.fetch.side_effect = CloudUnreachable("tw timed out")
+    coord._fetcher = fetcher
+
+    async def _exec(fn, *a):
+        return fn(*a)
+
+    mock_refresh = AsyncMock(return_value=True)
+    with (
+        patch.object(coord, "_refresh_and_persist", new=mock_refresh),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+        pytest.raises(UpdateFailed),
+    ):
+        await coord._async_update_data()
+    mock_refresh.assert_not_awaited()
+
+
+async def test_map_coordinator_unreachable_during_refresh_raises_update_failed_not_reauth(
+    hass: HomeAssistant,
+) -> None:
+    """A passToken renewal that can't reach Xiaomi must not force a reauth."""
+    coord = _map_coord(hass)
+
+    fetcher = MagicMock()
+    fetcher.fetch.side_effect = SessionExpired("dead")
+    coord._fetcher = fetcher
+
+    async def _exec(fn, *a):
+        return fn(*a)
+
+    with (
+        patch.object(
+            coord, "_refresh_and_persist",
+            new=AsyncMock(side_effect=CloudUnreachable("account.xiaomi.com timed out")),
+        ),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+        pytest.raises(UpdateFailed),
     ):
         await coord._async_update_data()
 
@@ -734,6 +897,270 @@ async def test_map_upload_request_uses_active_map_and_throttles(
     assert first is True
     assert second is False
     coord._device.request_map_upload.assert_called_once_with(7)
+
+
+def _cloud_upload_coord(hass: HomeAssistant, cloud: MagicMock | None) -> XiaomiMapCoordinator:
+    """A coordinator on map 7 whose device declares ijai's 10/14 then 10/2 upload actions."""
+    coord = _map_coord(hass)
+    coord._map_list_meta = [{"id": 7, "cur": True, "name": "Upstairs"}]
+    coord._cloud = cloud
+    coord._device.map_upload_actions.return_value = [
+        Action(siid=10, aiid=14), Action(siid=10, aiid=2),
+    ]
+    return coord
+
+
+async def _run_upload_request(hass: HomeAssistant, coord: XiaomiMapCoordinator) -> bool:
+    async def _exec(fn, *args):
+        return fn(*args)
+
+    with patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)):
+        return await coord.async_request_map_upload()
+
+
+async def test_map_upload_request_goes_through_the_cloud_first(hass: HomeAssistant) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": 0}
+    coord = _cloud_upload_coord(hass, cloud)
+
+    assert await _run_upload_request(hass, coord) is True
+
+    cloud.cloud_action.assert_called_once_with("cn", "did123", 10, 14, [7])
+    coord._device.request_map_upload.assert_not_called()
+
+
+async def test_map_upload_request_tries_10_2_when_the_cloud_rejects_10_14(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.side_effect = [{"code": -1}, {"code": 0}]
+    coord = _cloud_upload_coord(hass, cloud)
+
+    assert await _run_upload_request(hass, coord) is True
+
+    assert cloud.cloud_action.call_args_list == [
+        call("cn", "did123", 10, 14, [7]),
+        call("cn", "did123", 10, 2, [7]),
+    ]
+    coord._device.request_map_upload.assert_not_called()
+
+
+async def test_map_upload_request_falls_back_to_local_when_the_cloud_rejects_both(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": -1}
+    coord = _cloud_upload_coord(hass, cloud)
+
+    assert await _run_upload_request(hass, coord) is True
+
+    assert cloud.cloud_action.call_count == 2
+    coord._device.request_map_upload.assert_called_once_with(7)
+
+
+async def test_map_upload_request_falls_back_to_local_when_the_cloud_raises(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.side_effect = RuntimeError("network down")
+    coord = _cloud_upload_coord(hass, cloud)
+
+    assert await _run_upload_request(hass, coord) is True
+
+    coord._device.request_map_upload.assert_called_once_with(7)
+
+
+async def test_map_upload_request_goes_local_when_there_is_no_cloud_session(
+    hass: HomeAssistant,
+) -> None:
+    coord = _cloud_upload_coord(hass, None)
+
+    assert await _run_upload_request(hass, coord) is True
+
+    coord._device.request_map_upload.assert_called_once_with(7)
+
+
+async def test_map_upload_request_reports_failure_when_cloud_and_local_both_fail(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": -1}
+    coord = _cloud_upload_coord(hass, cloud)
+    coord._device.request_map_upload.side_effect = RuntimeError("-9999")
+
+    assert await _run_upload_request(hass, coord) is False
+
+
+async def test_mqtt_upload_event_refreshes_without_requesting_an_upload(
+    hass: HomeAssistant,
+) -> None:
+    """event_occured/10/6 is the answer to an upload, so it must not ask for another."""
+    cloud = MagicMock()
+    coord = _cloud_upload_coord(hass, cloud)
+    coord.async_refresh = AsyncMock()
+
+    async def _exec(fn, *args):
+        return fn(*args)
+
+    msg = MqttMessage(kind="event", topic="x", siid=10, eiid=6)
+    with (
+        patch("custom_components.xiaomi_vac.map_coordinator._DEBOUNCE_SECONDS", 0),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+    ):
+        await coord.async_on_mqtt_message(msg)
+        await asyncio.sleep(0.05)
+
+    cloud.cloud_action.assert_not_called()
+    coord._device.request_map_upload.assert_not_called()
+    coord.async_refresh.assert_awaited_once()
+
+
+async def test_mqtt_curmap_then_upload_event_requests_one_upload(hass: HomeAssistant) -> None:
+    """A curMapId push and the upload event it provokes, in one burst, ask once."""
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": 0}
+    coord = _cloud_upload_coord(hass, cloud)
+    coord.async_refresh = AsyncMock()
+
+    async def _exec(fn, *args):
+        return fn(*args)
+
+    with (
+        patch("custom_components.xiaomi_vac.map_coordinator._DEBOUNCE_SECONDS", 0),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+    ):
+        await coord.async_on_mqtt_message(
+            MqttMessage(kind="property", topic="x", siid=10, piid=2, value=7)
+        )
+        await coord.async_on_mqtt_message(MqttMessage(kind="event", topic="x", siid=10, eiid=6))
+        await asyncio.sleep(0.05)
+
+    cloud.cloud_action.assert_called_once_with("cn", "did123", 10, 14, [7])
+    coord.async_refresh.assert_awaited_once()
+
+
+async def _run_cycle(hass: HomeAssistant, coord: XiaomiMapCoordinator) -> dict:
+    fetcher = MagicMock()
+    fetcher.fetch.side_effect = [_fake_result(map_id=7), None]
+    coord._fetcher = fetcher
+
+    async def _exec(fn, *args):
+        return fn(*args)
+
+    with (
+        patch.object(coord, "_ensure_cache", new=AsyncMock(return_value=_FakeCache())),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+    ):
+        await coord._async_update_data()
+    return coord.last_cycle.as_dict()
+
+
+async def test_cycle_record_shows_an_upload_request_sent_through_the_cloud(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": 0}
+    coord = _cloud_upload_coord(hass, cloud)
+    await _run_upload_request(hass, coord)
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is True
+    assert record["upload_request_route"] == "cloud"
+    assert record["upload_request_ok"] is True
+
+
+async def test_cycle_record_shows_a_cloud_rejection_that_fell_back_to_local(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": -1}
+    coord = _cloud_upload_coord(hass, cloud)
+    await _run_upload_request(hass, coord)
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is True
+    assert record["upload_request_route"] == "local"
+    assert record["upload_request_ok"] is True
+
+
+async def test_cycle_record_shows_a_failed_upload_request(hass: HomeAssistant) -> None:
+    coord = _cloud_upload_coord(hass, None)
+    coord._device.request_map_upload.side_effect = RuntimeError("-9999")
+    await _run_upload_request(hass, coord)
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is True
+    assert record["upload_request_route"] == "local"
+    assert record["upload_request_ok"] is False
+
+
+async def test_cycle_record_shows_no_upload_request_on_a_plain_poll(hass: HomeAssistant) -> None:
+    coord = _cloud_upload_coord(hass, MagicMock())
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is False
+    assert record["upload_request_route"] is None
+    assert record["upload_request_ok"] is None
+
+
+async def test_cycle_record_does_not_carry_an_upload_request_into_the_next_cycle(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": 0}
+    coord = _cloud_upload_coord(hass, cloud)
+    await _run_upload_request(hass, coord)
+    await _run_cycle(hass, coord)
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is False
+
+
+async def test_cycle_record_ignores_a_throttled_upload_request(hass: HomeAssistant) -> None:
+    coord = _cloud_upload_coord(hass, None)
+    await _run_upload_request(hass, coord)
+    await _run_cycle(hass, coord)
+    assert await _run_upload_request(hass, coord) is False  # inside the 30 s throttle
+
+    record = await _run_cycle(hass, coord)
+
+    assert record["upload_request_sent"] is False
+
+
+async def test_map_interval_drops_to_30s_when_a_clean_starts_without_a_map_poll(
+    hass: HomeAssistant,
+) -> None:
+    coord = _map_coord(hass)
+    assert coord.update_interval.total_seconds() == 300
+    on_control_update = coord._control.async_add_listener.call_args.args[0]
+
+    coord._control.data = SimpleNamespace(activity="cleaning")
+    on_control_update()
+
+    assert coord.update_interval.total_seconds() == 30
+    await coord.async_shutdown()
+
+
+async def test_map_poll_while_cleaning_asks_for_an_upload_once_per_throttle_window(
+    hass: HomeAssistant,
+) -> None:
+    cloud = MagicMock()
+    cloud.cloud_action.return_value = {"code": 0}
+    coord = _cloud_upload_coord(hass, cloud)
+    coord._control.data = SimpleNamespace(activity="cleaning")
+
+    first = await _run_cycle(hass, coord)
+    second = await _run_cycle(hass, coord)
+
+    assert first["upload_request_sent"] is True
+    assert first["upload_request_route"] == "cloud"
+    assert second["upload_request_sent"] is False
+    cloud.cloud_action.assert_called_once_with("cn", "did123", 10, 14, [7])
 
 
 async def test_mqtt_curmap_event_uploads_selected_map_and_refreshes(

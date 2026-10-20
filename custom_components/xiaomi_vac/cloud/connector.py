@@ -35,6 +35,10 @@ class CaptchaRequired(Exception):
     """Raised when the caller did not supply a captcha callback."""
 
 
+class CloudUnreachable(Exception):
+    """Raised when a Xiaomi server couldn't be reached (timeout, DNS, connection)."""
+
+
 class XiaomiCloud:
     def __init__(self, username: str, password: str = ""):
         # password is only needed for the interactive login (begin_login). Session
@@ -52,9 +56,13 @@ class XiaomiCloud:
         # resumable-login scratch state
         self.captcha_image: bytes | None = None
         self.login_error: str = ""  # Xiaomi's desc from the last failed login
+        self.login_code: int | None = None  # Xiaomi's code from the last failed login
+        self.last_call_unreachable = False  # last _call() hit a network error
         self._fields: dict = {}
         self._2fa_ctx: str | None = None
         self._lp_url: str | None = None
+        # per-region outcome of the last list_vacuums() call
+        self.discovery_record: list[dict] = []
 
     # --- QR login -------------------------------------------------------
     def qr_begin(self) -> tuple[bytes, str]:
@@ -119,29 +127,102 @@ class XiaomiCloud:
         return "ok" if self.service_token else "fail"
 
     # --- device discovery ----------------------------------------------
-    def list_vacuums(self) -> list[dict]:
+    def list_vacuums(self, prefer_server: str | None = None) -> list[dict]:
         """List all vacuum devices across servers with localip + token.
 
         Returns every device whose model string contains ``.vacuum.``; brand
         filtering (supported vs. unsupported) is left to the caller.
+
+        @param prefer_server: region that wins a tie between equally online duplicate records
         """
         found: dict[str, dict] = {}  # keyed by did to dedupe across servers
+        sightings: dict[str, list[tuple[str, bool]]] = {}  # did -> (region, isOnline)
+        kept_online: dict[str, bool] = {}
+        self.discovery_record = []
         for srv in SERVERS:
             resp = self._call(self._api_url(srv) + "/home/device_list",
                               {"data": '{"getVirtualModel":false,"getHuamiDevices":0}'})
             if not resp:
+                self.discovery_record.append(
+                    {"region": srv, "answered": False, "devices": 0, "vacuums": 0,
+                     "homes_answered": False, "owned_homes": 0, "shared_homes": 0,
+                     "home_only_vacuums": 0})
                 continue
-            for d in resp.get("result", {}).get("list", []):
+            devices = resp.get("result", {}).get("list", [])
+            flat = [(d, d.get("uid")) for d in devices if ".vacuum." in d.get("model", "")]
+            flat_dids = {d.get("did") for d, _ in flat}
+            homes = self._list_homes(srv)
+            owned, shared = homes or ([], [])
+            home_only: dict[str, tuple[dict, object]] = {}
+            for home in owned + shared:
+                for d in self._list_home_devices(srv, home):
+                    if ".vacuum." in d.get("model", "") and d.get("did") not in flat_dids:
+                        home_only.setdefault(d.get("did"), (d, home.get("uid")))
+            for d, owner_uid in flat + list(home_only.values()):
                 model = d.get("model", "")
                 did = d.get("did")
-                if did in found or ".vacuum." not in model:
-                    continue
+                _LOGGER.debug("Discovery region=%s vacuum model=%s", srv, model)
+                online = d.get("isOnline") is True
+                sightings.setdefault(did, []).append((srv, online))
+                if did in found:
+                    replaces = not kept_online[did] and online
+                    ties_on_preferred = srv == prefer_server and online == kept_online[did]
+                    if not (replaces or ties_on_preferred):
+                        continue
+                kept_online[did] = online
                 found[did] = {
                     "name": d.get("name"), "did": did, "model": model,
-                    "mac": d.get("mac", ""), "localip": d.get("localip", ""),
+                    "mac": d.get("mac", ""), "localip": d.get("localip") or d.get("local_ip", ""),
                     "token": d.get("token", ""), "server": srv,
+                    "owner_uid": str(owner_uid or ""),
                 }
+            self.discovery_record.append(
+                {"region": srv, "answered": True, "devices": len(devices), "vacuums": len(flat),
+                 "homes_answered": homes is not None, "owned_homes": len(owned),
+                 "shared_homes": len(shared), "home_only_vacuums": len(home_only)})
+        for rec in self.discovery_record:
+            _LOGGER.debug(
+                "Discovery region=%s answered=%s devices=%d vacuums=%d homes_answered=%s "
+                "owned_homes=%d shared_homes=%d home_only_vacuums=%d",
+                rec["region"], rec["answered"], rec["devices"], rec["vacuums"],
+                rec["homes_answered"], rec["owned_homes"], rec["shared_homes"],
+                rec["home_only_vacuums"],
+            )
+        for did, seen in sightings.items():
+            if len(seen) > 1:
+                _LOGGER.debug(
+                    "Discovery duplicate regions=%s kept=%s",
+                    ",".join(f"{r}(isOnline={o})" for r, o in seen), found[did]["server"],
+                )
         return list(found.values())
+
+    def _list_homes(self, srv: str) -> tuple[list[dict], list[dict]] | None:
+        """List the account's owned and shared homes in one region.
+
+        @param srv: region code
+        @returns (owned homes, shared homes), or None if the region didn't answer
+        """
+        resp = self._call(self._api_url(srv) + "/v2/homeroom/gethome", {"data": json.dumps(
+            {"fg": True, "fetch_share": True, "fetch_share_dev": True,
+             "limit": 300, "app_ver": 7})})
+        if not resp:
+            return None
+        result = resp.get("result") or {}
+        return result.get("homelist") or [], result.get("share_home_list") or []
+
+    def _list_home_devices(self, srv: str, home: dict) -> list[dict]:
+        """List one home's devices, asking as the home's owner.
+
+        @param srv: region code
+        @param home: home entry from gethome
+        @returns the home's device records, empty if the call failed
+        """
+        if not home.get("id") or not home.get("uid"):
+            return []
+        resp = self._call(self._api_url(srv) + "/v2/home/home_device_list", {"data": json.dumps(
+            {"home_id": int(home["id"]), "home_owner": int(home["uid"]), "limit": 200,
+             "get_split_device": True, "support_smart_home": True})})
+        return ((resp or {}).get("result") or {}).get("device_info") or []
 
     def restore_session(self, user_id, ssecurity, service_token, pass_token=None) -> None:
         """Reuse a session captured at config-flow time (no re-login)."""
@@ -172,6 +253,8 @@ class XiaomiCloud:
             self.pass_token = j.get("passToken", self.pass_token)
             r2 = self._s.get(j["location"], headers=h, timeout=10)
             token = r2.cookies.get("serviceToken")
+        except requests.exceptions.RequestException as ex:
+            raise CloudUnreachable(str(ex)) from ex
         except Exception:  # noqa: BLE001
             return False
         if token:
@@ -231,7 +314,11 @@ class XiaomiCloud:
             self._start_email_2fa(j["notificationUrl"])
             return "2fa"
         self.login_error = str(j.get("desc") or "")
-        _LOGGER.error("Xiaomi account sign-in rejected: %s", self.login_error or j)
+        self.login_code = j.get("code")
+        _LOGGER.error(
+            "Xiaomi account sign-in rejected: %s (code %s)",
+            self.login_error or j, self.login_code,
+        )
         return "fail"
 
     def login(
@@ -388,12 +475,14 @@ class XiaomiCloud:
             params[k] = _enc_rc4(sn, v)
         params.update({"signature": _enc_sig(url, sn, params),
                        "ssecurity": self.ssecurity, "_nonce": nonce})
+        self.last_call_unreachable = False
         try:
             r = self._s.post(url, headers=h, cookies=ck, params=params, timeout=10)
         except requests.exceptions.RequestException as ex:
+            self.last_call_unreachable = True
             # A transient network/DNS/timeout failure on ONE regional server
-            # must not abort multi-region discovery (find_device/list_vacuums
-            # already treat a falsy result as "skip this server"). Report it as
+            # must not abort multi-region discovery (list_vacuums
+            # already treats a falsy result as "skip this server"). Report it as
             # no response instead of propagating (#42).
             _LOGGER.debug("Cloud request to %s failed: %s", url, ex)
             return None
@@ -405,18 +494,6 @@ class XiaomiCloud:
         h = hashlib.sha256(base64.b64decode(self.ssecurity) + base64.b64decode(nonce))
         return base64.b64encode(h.digest()).decode()
 
-    def find_device(self, token: str, server: str | None = None):
-        """Return (server, did, model, name) for the device with this token."""
-        for srv in ([server] if server else SERVERS):
-            resp = self._call(self._api_url(srv) + "/home/device_list",
-                              {"data": '{"getVirtualModel":false,"getHuamiDevices":0}'})
-            if not resp:
-                continue
-            for d in resp["result"]["list"]:
-                if str(d.get("token", "")).casefold() == str(token).casefold():
-                    return srv, d["did"], d.get("model"), d.get("name")
-        return None, None, None, None
-
     def cloud_action(self, server: str, did: str, siid: int, aiid: int, in_params: list):
         """Call a MIoT action via the cloud (avoids local -9999 ack timeouts)."""
         url = self._api_url(server) + "/miotspec/action"
@@ -427,6 +504,25 @@ class XiaomiCloud:
         url = self._api_url(server) + "/miotspec/prop/get"
         body = {"params": [{"did": str(did), "siid": siid, "piid": piid}]}
         return self._call(url, {"data": json.dumps(body)})
+
+    def get_user_device_data(self, server: str, did: str, siid: int, piid: int,
+                             limit: int = 2, time_start: int = 0) -> list | None:
+        """Read a MIoT property's stored history (Tasshack's dreame-vacuum route).
+
+        Several dreame models (verified live: dreame.vacuum.r2211o) reject live
+        /miotspec/prop/get reads with -704030013 but publish the property via
+        the /user/get_user_device_data history endpoint. Returns the raw
+        result list (entries carrying "time" and "value"), or None.
+        """
+        body = {"uid": str(self.user_id), "did": str(did),
+                "time_end": 9999999999, "time_start": time_start,
+                "limit": limit, "key": f"{siid}.{piid}", "type": "prop"}
+        resp = self._call(self._api_url(server) + "/user/get_user_device_data",
+                          {"data": json.dumps(body)})
+        try:
+            return resp["result"]
+        except (TypeError, KeyError):
+            return None
 
     def map_url(self, server: str, did: str, map_name: str = "0",
                 endpoint: str = "get_interim_file_url_pro") -> str | None:
@@ -444,6 +540,7 @@ class XiaomiCloud:
         resp = self._try_map_url(server, obj, endpoint)
         if resp is not None:
             return resp
+        first_unreachable = self.last_call_unreachable
 
         alt = ("get_interim_file_url" if endpoint == "get_interim_file_url_pro"
                else "get_interim_file_url_pro")
@@ -451,6 +548,8 @@ class XiaomiCloud:
         if alt_resp is not None:
             _LOGGER.debug("map_url: %s failed, succeeded with %s", endpoint, alt)
             return alt_resp
+        if first_unreachable and self.last_call_unreachable:
+            raise CloudUnreachable(f"{server} map URL request timed out or failed to connect")
         return None
 
     def _try_map_url(self, server: str, obj_name: str, endpoint: str) -> str | None:

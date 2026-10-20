@@ -31,6 +31,7 @@ _KNOWN_MISSING_SHAPE = {
     "dreame.vacuum.r2104",
     "dreame.vacuum.r2205",
     "ijai.vacuum.v15",
+    "ijai.vacuum.v16",
     "viomi.vacuum.v18",
 }
 
@@ -53,6 +54,57 @@ def _shape_pairs() -> list[tuple[str, int]]:
         pairs.extend((model_id, int(shape)) for model_id in re.findall(r'"([^"]+)"', ids))
     assert pairs, "MODEL_SHAPE parsed as empty"
     return pairs
+
+
+def _zone_clean_models() -> set[str]:
+    src = _CARD.read_text(encoding="utf-8")
+    match = re.search(r"const ZONE_CLEAN_MODELS = new Set\(\[(.*?)\]\);", src, re.S)
+
+    assert match
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def test_zone_clean_models_match_verified_profile_family() -> None:
+    assert _zone_clean_models() == {
+        "ijai.vacuum.v17",
+        "ijai.vacuum.v18",
+        "ijai.vacuum.v19",
+        "xiaomi.vacuum.c107",
+        "xiaomi.vacuum.d101",
+        "xiaomi.vacuum.d102ev",
+        "xiaomi.vacuum.d102gl",
+        "xiaomi.vacuum.d109gl",
+        "xiaomi.vacuum.e101gb",
+        "xiaomi.vacuum.ov21gl",
+        "xiaomi.vacuum.ov21cn",
+        "xiaomi.vacuum.ov43gb",
+        "xiaomi.vacuum.ov51gl",
+        "xiaomi.vacuum.ov71gl",
+        "xiaomi.vacuum.pv21cn",
+    }
+
+
+def test_zone_sweep_profiles_are_exactly_the_x20_family_and_all_in_the_card() -> None:
+    zone_sweep_models = {
+        model for model, profile in MODEL_PROFILES.items() if profile.zone_sweep is not None
+    }
+
+    assert zone_sweep_models == {
+        "xiaomi.vacuum.c107",
+        "xiaomi.vacuum.d101",
+        "xiaomi.vacuum.d102ev",
+        "xiaomi.vacuum.d102gl",
+        "xiaomi.vacuum.d109gl",
+        "xiaomi.vacuum.e101gb",
+        "xiaomi.vacuum.ov21gl",
+        "xiaomi.vacuum.ov21cn",
+        "xiaomi.vacuum.ov43gb",
+        "xiaomi.vacuum.ov51gl",
+        "xiaomi.vacuum.ov71gl",
+        "xiaomi.vacuum.pv21cn",
+    }
+    assert zone_sweep_models <= _zone_clean_models()
+    assert "xiaomi.vacuum.b108gl" not in _zone_clean_models()
 
 
 def test_shape_keys_are_short_form() -> None:

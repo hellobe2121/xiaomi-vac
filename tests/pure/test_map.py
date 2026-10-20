@@ -166,17 +166,17 @@ def test_vector_map_defaults_to_no_scaling():
     assert unscaled["rooms"][0]["bbox"] == [-2750.0, -6550.0, 400.0, -3750.0]
 
 
-def test_vector_map_keeps_absent_room_label_position_absent():
-    """`Room.pos_x`/`pos_y` are optional; None must not become 0.0, which the
-    card would draw as a label stranded at the origin."""
+def test_vector_map_anchors_absent_room_label_at_bbox_centre():
+    """`Room.pos_x`/`pos_y` are optional (viomi drops text_pos); the label
+    anchors at the bbox centre rather than None, so the card still draws it."""
     md = _fake_md_mm()
     md.rooms[5].pos_x = None
     md.rooms[5].pos_y = None
 
     out = map_vector.vector_map(md, b"", ijai_grid=False, units_per_metre=1000.0)
 
-    assert out["rooms"][0]["cx"] is None
-    assert out["rooms"][0]["cy"] is None
+    assert out["rooms"][0]["cx"] == -1.175
+    assert out["rooms"][0]["cy"] == -5.15
 
 
 def test_overlay_units_per_metre_only_scales_xiaomi_json_family():
@@ -442,6 +442,7 @@ def test_dreame_phase1_hub_profiles_route_to_dreame_parser(model):
         "xiaomi.vacuum.d101",
         "xiaomi.vacuum.d102ev",
         "xiaomi.vacuum.d102gl",
+        "xiaomi.vacuum.ov31gl",
     ],
 )
 def test_d109gl_family_routes_to_xiaomi_json_parser(model):
@@ -543,6 +544,31 @@ def test_dreame_decrypt_cloud_blob_roundtrip():
     assert result == plaintext
 
 
+def test_ijai_b106bk_blob_unpacks_with_hex_key_style():
+    from Crypto.Cipher import AES
+    from Crypto.Hash import MD5
+    from Crypto.Util.Padding import pad
+    from vacuum_map_parser_base.config.color import ColorsPalette
+    from vacuum_map_parser_base.config.image_config import ImageConfig
+    from vacuum_map_parser_base.config.size import Sizes
+    from vacuum_map_parser_ijai.aes_decryptor import aes_encrypt
+
+    model = "xiaomi.vacuum.b106bk"
+    ids = dict(wifi_sn="SN123", owner_id="1000", device_id="2000",
+               model=model, device_mac="AA:BB:CC:DD:EE:FF")
+    seed = aes_encrypt("+".join([ids["wifi_sn"], ids["owner_id"], ids["device_id"]]),
+                       "aabbccddeeff" + "06bk")
+    hex_key = bytes.fromhex(MD5.new(seed.encode("utf-8")).hexdigest())
+    plaintext = b"synthetic b106bk map data " * 4
+    blob = AES.new(hex_key, AES.MODE_ECB).encrypt(
+        pad(zlib.compress(plaintext).hex().encode("utf-8"), 16))
+
+    parser = map_parsers.make_parser(
+        "ijai", model, ColorsPalette(), Sizes(), [], ImageConfig(), [])
+
+    assert parser.unpack_map(blob, **map_parsers.unpack_kwargs("ijai", **ids)) == plaintext
+
+
 def test_unpack_kwargs_per_brand():
     kw = dict(wifi_sn="SN", owner_id="OID", device_id="DID",
               model="m", device_mac="mac", enckey=None)
@@ -555,3 +581,109 @@ def test_unpack_kwargs_per_brand():
     assert map_parsers.unpack_kwargs("dreame", **{**kw, "enckey": "K"}) == {"enckey": "K"}
     assert map_parsers.unpack_kwargs("viomi", **kw) == {}
     assert map_parsers.unpack_kwargs("roidmi", **kw) == {}
+
+
+# --- viomi v22 raw grid + JSON trailer --------------------------------------
+def _viomi_v22_frame(*, header: bytes = b"\x01\x7b\x00\x02") -> tuple[bytes, dict]:
+    """Build a 4x4 occupancy grid plus the JSON trailer the way v22 uploads it."""
+    # Row 0 is the bottom row. Room ids are the device's native 1 and 2.
+    rows = [
+        [0xFF, 0xFF, 0xFF, 0xFF],
+        [0xFF, 1, 2, 0xFF],
+        [0xFF, 1, 2, 0xFF],
+        [0x00, 0x7F, 0x00, 0x00],
+    ]
+    grid = bytes(v for row in rows for v in row)
+    meta = {
+        "width": 4, "height": 4, "mapId": 123, "resolution": 0.05,
+        "x_min": -0.1, "y_min": -0.2,
+        "autoArea": [
+            {"id": 1, "name": "Kitchen", "pos": [-50, -100]},
+            {"id": 2, "name": "%C3%89tkez%C5%91", "pos": [0, -100]},
+        ],
+        "chargeHandlePos": [331, 17],
+        "robotPos": [181, 16],
+        "robotPhi": 90,
+        "area": [
+            {"active": "forbid", "vertexs": [[0, 0], [1000, 2000]]},
+            {"active": "forbid", "vertexs": [[0, 0], [100, 0], [100, 100], [0, 100]]},
+        ],
+        "posArray": "[[100, -200], [150, -250]]",
+    }
+    return header + grid + json.dumps(meta).encode(), meta
+
+
+def _viomi_fetcher():
+    from xvac.map import MapFetcher
+
+    return MapFetcher(
+        SimpleNamespace(), server="de", user_id="1", device_id="2",
+        model="viomi.vacuum.v22", mac="AA", wifi_sn="SN", parser_brand="viomi")
+
+
+def test_viomi_json_trailer_converts_mm_to_metres_and_offsets_room_ids():
+    """Native ids 1..9 are shifted to the card's 10+ band, with native ids kept alongside."""
+    frame, _meta = _viomi_v22_frame()
+    md = _viomi_fetcher()._parse_viomi_json_trailer(frame)
+
+    assert md is not None
+    assert md.image is not None and not md.image.is_empty
+    assert sorted(md.rooms) == [10, 11]
+    assert md._viomi_native_room_ids == {10: 1, 11: 2}
+    assert md.rooms[10].name == "Kitchen"
+    assert md.rooms[11].name == "\u00c9tkez\u0151"
+    assert (md.rooms[10].pos_x, md.rooms[10].pos_y) == (-0.05, -0.1)
+    # Real bbox from the pixel grid: room 1 occupies column 1, rows 1..2.
+    assert md.rooms[10].x0 == pytest.approx(-0.1 + 1 * 0.05)
+    assert md.rooms[10].x1 == pytest.approx(-0.1 + 2 * 0.05)
+    assert md.rooms[10].y0 == pytest.approx(-0.2 + 1 * 0.05)
+    assert md.rooms[10].y1 == pytest.approx(-0.2 + 3 * 0.05)
+    assert (md.charger.x, md.charger.y) == (0.331, 0.017)
+    assert (md.vacuum_position.x, md.vacuum_position.y) == (0.181, 0.016)
+    assert md.vacuum_position.a == 90
+    assert [(w.x0, w.y0, w.x1, w.y1) for w in md.walls] == [(0.0, 0.0, 1.0, 2.0)]
+    assert len(md.no_go_areas) == 1
+    assert md.path.path[0][0].x == 0.1 and md.path.path[0][0].y == -0.2
+
+    extra = md._viomi_grid_extra
+    assert extra["size"] == {"x": 4, "y": 4}
+    assert extra["bounds"] == {"minX": -0.1, "minY": -0.2, "maxX": 0.1, "maxY": 0.0}
+    remapped = _expand_rle(extra["grid_rle"])
+    assert sorted(set(remapped)) == [0x00, 10, 11, 0x7F, 0xFF]
+    assert sorted(c["id"] for c in extra["room_chains"]) == [10, 11]
+
+
+def test_viomi_json_trailer_skips_a_brace_byte_in_the_header():
+    """A 0x7b map-id byte before the grid must not be mistaken for the JSON start."""
+    frame, _meta = _viomi_v22_frame(header=b"\x7b\x00\x7b\x00")
+    md = _viomi_fetcher()._parse_viomi_json_trailer(frame)
+
+    assert md is not None
+    assert sorted(md.rooms) == [10, 11]
+
+
+def test_viomi_json_trailer_returns_none_for_a_binary_frame():
+    assert _viomi_fetcher()._parse_viomi_json_trailer(b"\x00\x01\x7b\x02" * 8) is None
+
+
+def test_viomi_fetch_exposes_native_id_on_vector_rooms():
+    """fetch() carries the device's own room id next to the card id."""
+    import gzip
+
+    from xvac.map import MapFetcher
+
+    frame, _meta = _viomi_v22_frame()
+    cloud = SimpleNamespace(
+        map_url=lambda server, did, slot, endpoint: "http://x",
+        download=lambda url: gzip.compress(frame),
+    )
+    fetcher = MapFetcher(
+        cloud, server="de", user_id="1", device_id="2",
+        model="viomi.vacuum.v22", mac="AA", wifi_sn="SN", parser_brand="viomi")
+    result = fetcher.fetch("0")
+
+    assert result is not None
+    rooms = {r["id"]: r for r in result.vector["rooms"]}
+    assert {rid: r["native_id"] for rid, r in rooms.items()} == {10: 1, 11: 2}
+    assert result.vector["charger"] == {"x": 0.331, "y": 0.017}
+
