@@ -33,7 +33,15 @@ def test_status_maps_raw_activity(monkeypatch, raw_status, expected_raw, expecte
         (10, "docked"),
         (11, "docked"),
         (12, "docked"),
+        (0, "idle"),
+        (1, "idle"),
+        (2, "paused"),
+        (3, "returning"),
         (4, "docked"),
+        (5, "cleaning"),
+        (6, "cleaning"),
+        (7, "cleaning"),
+        (8, "idle"),
     ],
 )
 def test_c101_core_reports_docked_for_dock_station_statuses(monkeypatch, raw_status, expected_activity):
