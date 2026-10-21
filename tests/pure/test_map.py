@@ -443,6 +443,10 @@ def test_dreame_phase1_hub_profiles_route_to_dreame_parser(model):
         "xiaomi.vacuum.d102ev",
         "xiaomi.vacuum.d102gl",
         "xiaomi.vacuum.ov31gl",
+        "xiaomi.vacuum.ov21gl",
+        "xiaomi.vacuum.pv21cn",
+        "xiaomi.vacuum.ov51gl",
+        "xiaomi.vacuum.ov21cn",
     ],
 )
 def test_d109gl_family_routes_to_xiaomi_json_parser(model):
