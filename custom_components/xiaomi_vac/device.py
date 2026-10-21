@@ -334,7 +334,7 @@ class IjaiVacuumDevice:
         """Return the start-custom action and structured params, when available.
 
         The in-params are [{piid: work-mode, value: SEGMENT_CLEANING},
-        {piid: clean-extend-data, value: '{"selects":[[room,1,fan,water,1]]}'}]
+        {piid: clean-extend-data, value: '{"selects":[[room,1,fan,water,order]]}'}]
         — sent as named inputs so _action builds the {piid, value} list the
         device expects. Fan/water default to standard/low; the device's own
         per-room cleanset still applies its stored settings.
@@ -347,7 +347,7 @@ class IjaiVacuumDevice:
             and cap.start_custom_props is not None
         ):
             return None
-        selects = [[int(r), 1, 1, 1, 1] for r in room_ids]
+        selects = [[int(r), 1, 1, 1, i + 1] for i, r in enumerate(room_ids)]
         payload = json.dumps({"selects": selects}, separators=(",", ":"))
         return cap.start_custom, [cap.segment_cleaning_status, payload]
 
