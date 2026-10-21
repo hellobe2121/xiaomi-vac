@@ -14,5 +14,7 @@ requirements-dev-win.txt
 
 TODOS.md
 CLAUDE.md
-
+.claude/
+AGENTS.md
+GEMINI.md
 .mi_session.json
