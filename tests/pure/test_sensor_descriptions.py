@@ -84,6 +84,7 @@ def test_build_sensors_ijai_v17_exact_set(monkeypatch):
         "side_brush_life",
         "filter_life",
         "mop_life",
+        "voice_pack",
     }
 
 
