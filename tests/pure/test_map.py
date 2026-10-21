@@ -646,6 +646,18 @@ def test_viomi_json_trailer_skips_a_brace_byte_in_the_header():
     assert sorted(md.rooms) == [10, 11]
 
 
+def test_viomi_json_trailer_parses_a_pretty_printed_trailer():
+    """v22 pretty-prints the trailer mid-clean ('{\\n\\t"width" : ...'), stray brace byte included."""
+    frame, meta = _viomi_v22_frame(header=b"\x7b\x00\x7b\x00")
+    grid = frame[4:-len(json.dumps(meta))]
+    pretty = json.dumps(meta, indent="\t", separators=(",", " : ")).encode()
+    assert pretty.startswith(b"{\n\t\"")
+    md = _viomi_fetcher()._parse_viomi_json_trailer(b"\x7b\x00\x7b\x00" + grid + pretty)
+
+    assert md is not None
+    assert sorted(md.rooms) == [10, 11]
+
+
 def test_viomi_json_trailer_returns_none_for_a_binary_frame():
     assert _viomi_fetcher()._parse_viomi_json_trailer(b"\x00\x01\x7b\x02" * 8) is None
 
