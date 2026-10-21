@@ -1034,7 +1034,7 @@ XIAOMI_OV21CN = replace(
 # xiaomi.vacuum.pv21cn (Mijia Robot Vacuum 6 Pro) — same wired siid/piid/aiid
 # as ov21gl, but siid 2 piid 4 (sweep-mop-type) has no "Mop" (2) value, and
 # siid 2 piid 2 (status) adds 25 SelfChecking and 26 Summoning.
-# Consumables unverified (see ov71gl note above).
+# Consumables read by a real 6 Pro owner (#38): ov21gl's siids, mop at siid 24.
 XIAOMI_CORE_PV21CN = replace(
     XIAOMI_CORE_OV21GL,
     status_map={**XIAOMI_CORE_OV21GL.status_map, 25: 'idle', 26: 'cleaning'},
@@ -1047,7 +1047,13 @@ XIAOMI_PV21CN = replace(
     notes=("urn:miot-spec-v2:device:vacuum:0000A006:xiaomi-pv21cn:1",),
     core=XIAOMI_CORE_PV21CN,
     zone_sweep=ZoneSweepCapability(start=Action(2, 37, in_piid=12)),  # start-zone-sweep / zone-ids
-    consumables=None,
+    consumables=DreameConsumablesCapability(
+        main_brush_life=Prop(12, 1), main_brush_left_time=Prop(12, 2),
+        side_brush_life=Prop(13, 1), side_brush_left_time=Prop(13, 2),
+        filter_life=Prop(14, 1), filter_left_time=Prop(14, 2),
+        mop_life=Prop(24, 1), mop_left_time=Prop(24, 2),
+        dust_bag_life=Prop(19, 1), dust_bag_left_time=Prop(19, 2),
+    ),
 )
 
 # xiaomi.vacuum.ov42gl (Xiaomi Robot Vacuum H50 Pro) — identical spec layout

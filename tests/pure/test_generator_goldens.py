@@ -48,6 +48,7 @@ _DEVIATIONS: dict[tuple[str, str | None], tuple[tuple[str, ...], str]] = {
     ),
     ("viomi.v15", "settings"): (("language",), "cur-lang 4/31 wired by a v22 owner (PR #74), not in the generator's table"),
     ("xiaomi.pv21cn", "core"): (("status_map",), "status 25 SelfChecking and 26 Summoning mapped by hand, not in the generator's table"),
+    ("xiaomi.pv21cn", "consumables"): ((), "hardware-confirmed by a 6 Pro owner, mop at siid 24 (#38)"),
     ("xiaomi.ov31gl", None): ((), "no spec in library"),
     ("xiaomi.ov42gl", None): ((), "no spec in library"),
     ("xiaomi.e101gb", None): ((), "no spec in library"),
