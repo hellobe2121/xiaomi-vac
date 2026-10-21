@@ -149,6 +149,31 @@ def test_ov31gl_room_clean_uses_named_input(monkeypatch):
     ]
 
 
+def test_r2211o_room_clean_uses_start_custom_selects(monkeypatch):
+    """start-room-sweep (2/3) ACKs but no-ops on r2211o (issue #83); the
+    start-custom action (4/1) with status 18 and a selects payload cleans."""
+    device_mod = load_device_module(monkeypatch)
+    device = device_mod.IjaiVacuumDevice("host", "token", "dreame.vacuum.r2211o")
+
+    device.clean_segments([5, 7])
+
+    assert _last_calls() == [
+        (
+            "send",
+            "action",
+            {
+                "did": "call-4-1",
+                "siid": 4,
+                "aiid": 1,
+                "in": [
+                    {"piid": 1, "value": 18},
+                    {"piid": 10, "value": '{"selects":[[5,1,1,1,1],[7,1,1,1,2]]}'},
+                ],
+            },
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     "model", ["ijai.vacuum.v17", "ijai.vacuum.v18", "ijai.vacuum.v19"]
 )
