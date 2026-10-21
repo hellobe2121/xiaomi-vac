@@ -69,6 +69,14 @@ def test_viomi_v45_uses_ijai_shaped_core_for_card_controls():
     assert card_baseline_gaps(profile) == ()
 
 
+def test_viomi_v15_family_maps_volume_and_system_language():
+    for model in ("v15", "v17", "v22", "v40"):
+        profile = get_profile(f"viomi.vacuum.{model}")
+        assert profile.core.volume == Prop(2, 17)
+        assert profile.settings.language == Prop(4, 31)
+        assert profile.voice.cur_voice == Prop(8, 4)
+
+
 def test_trimmed_dreame_layout_is_not_onboardable():
     profile = get_profile("dreame.vacuum.r2235a")
 
