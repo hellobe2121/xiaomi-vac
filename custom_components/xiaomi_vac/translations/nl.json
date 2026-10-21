@@ -108,7 +108,6 @@
       "reconfigure_reauth_required": "De Xiaomi-login is vervallen en kon niet automatisch hernieuwd worden. Authenticeer deze integratie opnieuw, en probeer het dan nog eens. Niets werd gewijzigd.",
       "reconfigure_local_only": "Deze stofzuiger werd toegevoegd door middel van een IP-adres en token. Er is dus geen Xiaomi-account om de gegevens te vernieuwen. Niets werd gewijzigd.",
       "login_failed": "Xiaomi weigert dit ({reason}). Controleer uw e-mail en wachtwoord en probeer het opnieuw.",
-      "login_verification_required": "Xiaomi heeft deze login geblokkeerd en wilt het account verifiëren. Log in via account.xiaomi.com (of the Xiaomi Home app), voltooi de verificatie en probeer het dan opnieuw.",
       "no_devices": "Geen ondersteunde stofzuigers op dit account.",
       "unsupported_model": "{model} werd gevonden, en deze is nog niet ondersteund. Open een verzoek voor een nieuw model op de GitHub-pagina van deze integration. Vergeet niet om de naam van het mdel te vermelden."
     }
