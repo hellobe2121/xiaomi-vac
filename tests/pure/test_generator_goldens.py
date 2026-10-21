@@ -34,6 +34,8 @@ _DEVIATIONS: dict[tuple[str, str | None], tuple[tuple[str, ...], str]] = {
         ("start_custom", "start_custom_status", "start_custom_props"),
         "2/3 start-room-sweep no-ops, start-custom 4/1 with a selects payload cleans (PR #72, issue #83)",
     ),
+    ("xiaomi.c101", "core"): (("status_map",), "status 9-12 mapped to docked by hand, dock-station states (issue #79)"),
+    ("xiaomi.c101eu", "core"): (("status_map",), "status 9-12 mapped to docked by hand, dock-station states (issue #79)"),
     ("xiaomi.c107", "core"): (("status_map",), "keeps ov21gl's codes 22-24 its spec doesn't declare (d6f017f)"),
     ("xiaomi.d102ev", "core"): (("status_map",), "keeps ov21gl's codes 22-24 its spec doesn't declare (d6f017f)"),
     ("xiaomi.d102gl", "core"): (("status_map",), "keeps ov21gl's codes 22-24 its spec doesn't declare (d6f017f)"),

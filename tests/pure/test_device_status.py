@@ -26,6 +26,28 @@ def test_status_maps_raw_activity(monkeypatch, raw_status, expected_raw, expecte
     assert status.activity == expected_activity
 
 
+@pytest.mark.parametrize(
+    ("raw_status", "expected_activity"),
+    [
+        (9, "docked"),
+        (10, "docked"),
+        (11, "docked"),
+        (12, "docked"),
+        (4, "docked"),
+    ],
+)
+def test_c101_core_reports_docked_for_dock_station_statuses(monkeypatch, raw_status, expected_activity):
+    device_mod = load_device_module(monkeypatch)
+    device = device_mod.IjaiVacuumDevice("host", "token", "xiaomi.vacuum.d106gl")
+    status_prop = device.core.status
+    FakeMiotDevice.property_values = {(status_prop.siid, status_prop.piid): raw_status}
+
+    status = device.status()
+
+    assert status.raw_status == raw_status
+    assert status.activity == expected_activity
+
+
 def test_status_raises_when_required_prop_fails(monkeypatch):
     """A failing status read must raise DeviceCommunicationError, not return idle."""
     device_mod = load_device_module(monkeypatch)
