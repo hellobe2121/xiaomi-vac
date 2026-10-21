@@ -26,7 +26,9 @@ _LOGGER = logging.getLogger(__name__)
 # `room_chains`, geometry, carpets, and segmented travelled paths. A v2 entry
 # holds the old vector, and `async_upsert` is a no-op while the blob's
 # content_hash is unchanged -- so without this bump stale data survives upgrade.
-STORAGE_VERSION = 3
+# v4 (room ids): a non-one-to-one `map_room_info` (ov21gl: room_id 0 for every
+# room) now falls back to grid ids; v3 entries hold every room merged into one.
+STORAGE_VERSION = 4
 # HA's own Store file-format version, deliberately pinned. Raising it would make
 # Store.async_load hit its migration path and raise NotImplementedError, which
 # `async_load` can only report as "cache unreadable"; the payload check below is

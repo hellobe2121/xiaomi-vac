@@ -637,14 +637,19 @@ class MapFetcher:
         carpets = parse_carpets(unpacked) if self._brand == "xiaomi" else []
         path_segments = parse_path(unpacked) if self._brand == "xiaomi" else []
         try:
+            payload = unpacked
+            if self._json_grid:
+                payload = json.loads(unpacked)
+                if not map_vector.json_room_map(payload):
+                    payload.pop("map_room_info", None)
             md = None
             if self._brand == "viomi":
                 md = self._parse_viomi_json_trailer(unpacked)
             if md is None:
-                md = self._parser.parse(unpacked)
+                md = self._parser.parse(payload)
                 self._filter_dreame_stale_rooms(md, unpacked)
             vector = map_vector.vector_map(
-                md, _vector_source(self._parser, unpacked, self._ijai_grid),
+                md, _vector_source(self._parser, payload, self._ijai_grid),
                 ijai_grid=self._ijai_grid,
                 json_grid=self._json_grid,
                 units_per_metre=self._overlay_units,
