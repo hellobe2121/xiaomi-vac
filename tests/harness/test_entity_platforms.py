@@ -548,7 +548,9 @@ async def test_vacuum_clean_zone_uses_cloud_first(
     coord = _make_coordinator()
     coord.device.zone_clean_action.return_value = SimpleNamespace(siid=9, aiid=8)
     coord.device.zone_clean_start_action.return_value = SimpleNamespace(siid=9, aiid=3)
-    coord.device.zone_clean_params.return_value = ["[-1500,2250,-500,3000,1]"]
+    coord.device.zone_clean_params.return_value = [
+        "-1.5000,2.2500,-1.5000,3.0000,-0.5000,3.0000,-0.5000,2.2500"
+    ]
     coord.async_request_refresh = AsyncMock()
     entry = _make_entry()
     entry.data = {
@@ -571,7 +573,10 @@ async def test_vacuum_clean_zone_uses_cloud_first(
     coord.device.clean_zone.assert_not_called()
     cloud.cloud_action.assert_has_calls(
         [
-            call("sg", "did123", 9, 8, ["[-1500,2250,-500,3000,1]"]),
+            call(
+                "sg", "did123", 9, 8,
+                ["-1.5000,2.2500,-1.5000,3.0000,-0.5000,3.0000,-0.5000,2.2500"],
+            ),
             call("sg", "did123", 9, 3, []),
         ]
     )
