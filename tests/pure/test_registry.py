@@ -78,7 +78,12 @@ def test_pv21cn_resolves_card_baseline_without_mop_mode() -> None:
     assert profile is not None
     assert profile.core is not None
     assert profile.core.modes == {"sweep": 1, "sweep_mop": 3, "sweep_before_mopping": 4}
-    assert profile.consumables is None
+    assert profile.consumables is not None
+    assert profile.consumables.main_brush_life == Prop(12, 1)
+    assert profile.consumables.side_brush_life == Prop(13, 1)
+    assert profile.consumables.filter_life == Prop(14, 1)
+    assert profile.consumables.dust_bag_life == Prop(19, 1)
+    assert profile.consumables.mop_life == Prop(24, 1)
     assert profile.room_clean is not None
     assert profile.room_clean.room_ids == Prop(2, 15)
     assert profile.room_clean.start == Action(2, 16, in_piid=15)
