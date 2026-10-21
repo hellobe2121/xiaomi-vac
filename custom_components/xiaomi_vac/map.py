@@ -45,7 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _IJAI_PADDING_RETRY_WAIT = 3.0
 
-_RAW_ZLIB_MODELS =frozenset({"ijai.vacuum.v2"})
+_RAW_ZLIB_MODELS = frozenset({"ijai.vacuum.v2"})
 # Dreame models whose rooms list is trimmed to the map trailer's cleanset.
 # Only r2211o is verified (PR #72); other dreame firmware may keep a partial
 # cleanset, so they stay unfiltered until an owner confirms.
