@@ -240,7 +240,6 @@ def _cloud_clean_segments(data: dict, device: IjaiVacuumDevice, segments: list[i
     # last resort. start-custom must go through cloud_rpc_action —
     # /miotspec/action rejects its structured in-params with -704220043.
     attempts: list[tuple[str, Any, list]] = []
-    cap = device.profile.room_clean
     preferred = device.room_clean_set_params(segments)
     if preferred is not None:
         attempts.append(("spec", preferred[0], preferred[1]))
