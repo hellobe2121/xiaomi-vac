@@ -40,7 +40,11 @@ _DEVIATIONS: dict[tuple[str, str | None], tuple[tuple[str, ...], str]] = {
     ("xiaomi.d109gl", "core"): (("status_map",), "keeps ov21gl's codes 22-24 its spec doesn't declare (d6f017f)"),
     ("xiaomi.ov21gl", "consumables"): ((), "hardware-confirmed by an ov21gl owner, mop pad not detergent (5e5076a)"),
     ("xiaomi.ov51gl", "consumables"): ((), "inherits ov21gl's hardware-confirmed block, same services in its spec (b9ad50a)"),
-    ("viomi.v15", "core"): (("repeat",), "repeat-state wired by a v22 owner (PR #63), not in the generator's table"),
+    ("viomi.v15", "core"): (
+        ("repeat", "volume"),
+        "repeat-state wired by a v22 owner (PR #63), volume is the 2/17 mute prop (PR #74), neither in the generator's table",
+    ),
+    ("viomi.v15", "settings"): (("language",), "cur-lang 4/31 wired by a v22 owner (PR #74), not in the generator's table"),
     ("xiaomi.pv21cn", "core"): (("status_map",), "status 25 SelfChecking and 26 Summoning mapped by hand, not in the generator's table"),
     ("xiaomi.ov31gl", None): ((), "no spec in library"),
     ("xiaomi.ov42gl", None): ((), "no spec in library"),
