@@ -43,6 +43,10 @@ _DREAME_ENCKEY_PIID = 3
 _LOGGER = logging.getLogger(__name__)
 
 _RAW_ZLIB_MODELS = frozenset({"ijai.vacuum.v2"})
+# Dreame models whose rooms list is trimmed to the map trailer's cleanset.
+# Only r2211o is verified (PR #72); other dreame firmware may keep a partial
+# cleanset, so they stay unfiltered until an owner confirms.
+_DREAME_CLEANSET_FILTER_MODELS = frozenset({"dreame.vacuum.r2211o"})
 
 
 def _patch_parse_rooms() -> None:
@@ -515,7 +519,7 @@ class MapFetcher:
         dreame.vacuum.r2211o: the map carried junk segments 66-73 overlapping
         the real 1-9, and the device silently no-ops cleans targeted at them).
         """
-        if self._brand != "dreame" or not md.rooms:
+        if self._model not in _DREAME_CLEANSET_FILTER_MODELS or not md.rooms:
             return
         try:
             from vacuum_map_parser_dreame.map_data_parser import DreameMapDataParser
