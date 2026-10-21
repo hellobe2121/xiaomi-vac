@@ -372,3 +372,46 @@ def test_ijai_unpack_raises_when_neither_key_fits():
     f = _ijai_fetcher(FakeCloud())
     with pytest.raises(Exception):
         f._unpack(b"\x00" * 32)
+
+
+# --- ijai padding failure: one re-download (#46) ---------------------------
+class SequencedCloud(FakeCloud):
+    """FakeCloud whose successive downloads return the given blobs in order."""
+
+    def __init__(self, blobs):
+        super().__init__()
+        self._blobs = list(blobs)
+
+    def download(self, url):
+        self.calls.append(("download", url))
+        return self._blobs.pop(0)
+
+
+@pytest.mark.parametrize(
+    "second_copy_is_good, outcome",
+    [(True, "rendered"), (False, "undecryptable")],
+    ids=["bad-then-good", "bad-twice"],
+)
+def test_ijai_slot_failing_padding_is_downloaded_once_more(
+        monkeypatch, second_copy_is_good, outcome):
+    import time
+
+    import vacuum_map_parser_ijai.RobotMap_pb2 as RobotMap
+
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    rm = RobotMap.RobotMap()
+    rm.mapHead.sizeX = 2
+    rm.mapHead.sizeY = 2
+    rm.mapData.mapData = bytes(4)
+    kw = _ijai_fetcher(FakeCloud())._unpack_kw
+    good = _encrypt_ijai(rm.SerializeToString(), hex_key=True, **kw)
+    caught_mid_write = good[:-16] + b"\x00" * 16
+    cloud = SequencedCloud([caught_mid_write, good if second_copy_is_good else caught_mid_write])
+    f = _ijai_fetcher(cloud)
+    f._parser.parse = lambda unpacked: _renderable_md()
+
+    result = f.fetch("0")
+
+    assert (result is not None) is second_copy_is_good
+    assert f.last_attempt.outcome == outcome
+    assert [c[0] for c in cloud.calls].count("download") == 2

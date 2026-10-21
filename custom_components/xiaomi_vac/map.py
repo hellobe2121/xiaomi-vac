@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import logging
+import time
 import urllib.parse
 import zlib
 from dataclasses import dataclass, field
@@ -42,7 +43,9 @@ _DREAME_ENCKEY_PIID = 3
 
 _LOGGER = logging.getLogger(__name__)
 
-_RAW_ZLIB_MODELS = frozenset({"ijai.vacuum.v2"})
+_IJAI_PADDING_RETRY_WAIT = 3.0
+
+_RAW_ZLIB_MODELS =frozenset({"ijai.vacuum.v2"})
 # Dreame models whose rooms list is trimmed to the map trailer's cleanset.
 # Only r2211o is verified (PR #72); other dreame firmware may keep a partial
 # cleanset, so they stay unfiltered until an owner confirms.
@@ -585,21 +588,33 @@ class MapFetcher:
             _LOGGER.debug("Map download failed (slot %s)", slot)
             return None
 
-        try:
-            unpacked = self._unpack(raw)
-        except Exception as ex:  # noqa: BLE001
-            # Decrypt/decompress failed: a corrupt blob OR (routinely, per the
-            # map-reliability plan) an undecryptable "Key B" blob at this slot.
-            # Never crash the coordinator — it falls back to the other slot or
-            # the cache. A stale dreame enckey also lands here: drop it so the
-            # next fetch re-polls siid=6/piid=3.
-            if self._brand == "dreame" and self._enckey is not None:
-                _LOGGER.debug("dreame decrypt failed; will re-poll enckey next fetch: %s", ex)
-                self._enckey = None
-                self._enckey_polled = False
-            _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
-            attempt.outcome = "undecryptable"
-            return None
+        retried = False
+        while True:
+            try:
+                unpacked = self._unpack(raw)
+                break
+            except Exception as ex:  # noqa: BLE001
+                if not retried and self._brand == "ijai" and "Padding is incorrect" in str(ex):
+                    retried = True
+                    time.sleep(_IJAI_PADDING_RETRY_WAIT)
+                    raw = self._cloud.download(url)
+                    attempt.blob_bytes = len(raw) if raw else 0
+                    if not raw:
+                        attempt.outcome = "empty_download"
+                        return None
+                    continue
+                # Decrypt/decompress failed: a corrupt blob OR (routinely, per the
+                # map-reliability plan) an undecryptable "Key B" blob at this slot.
+                # Never crash the coordinator — it falls back to the other slot or
+                # the cache. A stale dreame enckey also lands here: drop it so the
+                # next fetch re-polls siid=6/piid=3.
+                if self._brand == "dreame" and self._enckey is not None:
+                    _LOGGER.debug("dreame decrypt failed; will re-poll enckey next fetch: %s", ex)
+                    self._enckey = None
+                    self._enckey_polled = False
+                _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
+                attempt.outcome = "undecryptable"
+                return None
         return self._result_from_unpacked(unpacked, attempt)
 
     def decode_live_frame(self, value: str) -> bytes | None:
