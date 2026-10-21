@@ -1,13 +1,10 @@
-.claude/
 .docs/
 .plans/
 .bundle/
 .scripts/
 venv/
 
-.pytest_cache/
 *.pyc
-__pycache__/
 
 custom_components/xiaomi_vac/spec/profiles/_drafts/
 
@@ -16,8 +13,6 @@ requirements-dev-win.txt
 
 
 TODOS.md
-AGENTS.md
 CLAUDE.md
-GEMINI.md
 
 .mi_session.json
