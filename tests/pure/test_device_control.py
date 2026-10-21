@@ -175,7 +175,8 @@ def test_r2211o_room_clean_uses_start_custom_selects(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "model", ["ijai.vacuum.v17", "ijai.vacuum.v18", "ijai.vacuum.v19"]
+    "model",
+    ["ijai.vacuum.v17", "ijai.vacuum.v18", "ijai.vacuum.v19", "xiaomi.vacuum.d106gl"],
 )
 def test_clean_zone_sets_piid_keyed_zone_then_starts(monkeypatch, model):
     device_mod = load_device_module(monkeypatch)

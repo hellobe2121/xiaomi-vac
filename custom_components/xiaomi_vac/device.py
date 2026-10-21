@@ -398,7 +398,7 @@ class IjaiVacuumDevice:
         return cap.set_room_clean, [values[piid] for piid in cap.set_room_clean.in_piids]
 
     def _point_zone(self):
-        if self.profile.profile_id != "ijai.v17":
+        if self.profile.profile_id not in ("ijai.v17", "xiaomi.c101eu"):
             return None
         cap = self.profile.map
         return cap.point_zone if isinstance(cap, MapCapability) else None
