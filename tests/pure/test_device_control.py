@@ -194,6 +194,24 @@ def test_clean_zone_sets_piid_keyed_zone_then_starts(monkeypatch, model):
     ]
 
 
+@pytest.mark.parametrize(
+    "zone",
+    [(-0.5, 3.0, -1.5, 2.25), (-1.5, 3.0, -0.5, 2.25), (-0.5, 2.25, -1.5, 3.0)],
+)
+def test_ijai_clean_zone_normalises_corners_to_min_max(monkeypatch, zone):
+    device_mod = load_device_module(monkeypatch)
+    device = device_mod.IjaiVacuumDevice("host", "token", "ijai.vacuum.v17")
+
+    device.clean_zone(*zone)
+
+    assert _last_calls()[0] == (
+        "action",
+        9,
+        8,
+        [{"piid": 2, "value": "-1.5000,2.2500,-1.5000,3.0000,-0.5000,3.0000,-0.5000,2.2500"}],
+    )
+
+
 def test_clean_zone_rejects_unverified_point_zone_profile(monkeypatch):
     device_mod = load_device_module(monkeypatch)
     device = device_mod.IjaiVacuumDevice("host", "token", "ijai.vacuum.v3")
