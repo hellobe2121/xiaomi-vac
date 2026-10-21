@@ -19,7 +19,7 @@
       },
       "local": {
         "title": "Lokale verbinding",
-        "description": "IP-adres en 32-teken token. Bediening en sensoren, geen kaart.",
+        "description": "IP-adres en 32-tekens token. Bediening en sensoren, geen kaart.",
         "data": {
           "host": "IP-adres",
           "token": "Token"
@@ -27,7 +27,7 @@
       },
       "captcha": {
         "title": "Snelle controle",
-        "description": "Xiaomi wil zeker weten dat u echt bent. Typ de onderstaande tekens:\n\n![captcha]({captcha_url})",
+        "description": "Xiaomi wilt zeker weten dat u echt bent. Typ de onderstaande tekens:\n\n![captcha]({captcha_url})",
         "data": {
           "code": "Tekens uit de afbeelding"
         }
@@ -41,14 +41,49 @@
       },
       "devices": {
         "title": "Kies uw stofzuiger",
-        "description": "Er is meer dan een stofzuiger op deze account. Kies degene die u wilt toevoegen.",
+        "description": "Er is meer dan één stofzuiger op dit account. Kies degene die u wilt toevoegen.",
         "data": {
           "device": "Stofzuiger"
         }
       },
+      "miot_oauth": {
+        "title": "Sta live kaartauthenticatie toe",
+        "description": "Optioneel. Dit bereidt de live MQTT-kaart voor. Sla het over om de huidige kaart-polling te behouden.",
+        "data": {
+          "enable_miot_oauth": "Sta OAuth toe voor live kaartupdates"
+        }
+      },
+      "miot_oauth_method": {
+        "title": "Koppel Xiaomi OAuth",
+        "description": "Nadat je toegang hebt goedgekeurd, zal Xiaomi je browser naar homeassistant.local:8123 sturen. Kies hoe je wilt afronden.",
+        "menu_options": {
+          "miot_oauth_auth": "Koppel automatisch (dit apparaat kan homeassistant.local:8123 automatisch openen)",
+          "miot_oauth_code": "Plak de code"
+        }
+      },
+      "miot_oauth_auth": {
+        "title": "Koppel Xiaomi OAuth",
+        "description": "Open de Xiaomi OAuth link. Home Assistant zal automatisch verderdoen zodra Xiaomi klaar is.",
+        "data": {}
+      },
+      "miot_oauth_code": {
+        "title": "Plak Xiaomi OAuth code",
+        "description": "Het automatisch terugsturen werd niet succesvol afgerond. Open deze link, sta toegang toe en plak dan de code uit de URL (na 'CODE=' en voor '&'):\n\n{authorize_url}",
+        "data": {
+          "code": "OAuth code"
+        }
+      },
+      "miot_oauth_finish": {
+        "title": "Xiaomi OAuth gekoppeld",
+        "description": "De live kaartauthenticatie is succesvol afgerond."
+      },
+      "reconfigure": {
+        "title": "Vernieuw Xiaomi cloud",
+        "description": "Zoek deze stofzuiger opnieuw op in je Xiaomi-account en update zijn IP-adres, token en regio. Gebruik deze functie wanneer de stofzuiger stopt met reageren na een IP verandering of na het opnieuw paren in de Xiaomi-app. Niets anders wordt gewijzigd."
+      },
       "reauth_confirm": {
         "title": "Meld u opnieuw aan bij Xiaomi",
-        "description": "Uw sessie is verlopen en kon niet automatisch worden vernieuwd. Meld u opnieuw aan om de live kaart herstellen.",
+        "description": "Uw sessie is verlopen en kon niet automatisch worden vernieuwd. Meld u opnieuw aan om de live kaart te herstellen.",
         "data": {
           "username": "E-mail, telefoonnummer of Mi-account-ID",
           "password": "Wachtwoord"
@@ -57,14 +92,86 @@
     },
     "error": {
       "unsupported_model": "Dit model wordt nog niet ondersteund.",
-      "cannot_connect": "Kan de stofzuiger niet bereiken op dat IP-adres met dat token."
+      "cannot_connect": "Kan de stofzuiger niet bereiken op dit IP-adres met deze token.",
+      "invalid_auth": "Verkeerd e-mailadres/telefoonnumer of wachtwoord. Als je zeker bent dat deze juist zijn, log dan opnieuw in via account.xioami.com om eventuele security checks to voltooien, en probeer dan opnieuw.",
+      "oauth_failed": "Xiaomi OAuth mislukt. Probeer de link opnieuw of plak de code manueel.",
+      "oauth_region_failed": "Het is niet gelukt om de Xiaomi OAuth regio af te leiden op basis van deze code."
+    },
+      "progress": {
+      	"miot_oauth_auth": "Open [Xiaomi OAuth]({authorize_url}) in een nieuwe tab. Na goedkeuring zal Xiaomi je automatisch richting Home Assistant terugsturen en zal dit proces verdergezet worden."
     },
     "abort": {
       "already_configured": "Deze stofzuiger is al ingesteld.",
-      "reauth_successful": "U bent weer ingelogd. De live kaart is hersteld.",
+      "reauth_successful": "U bent opnieuw ingelogd. De live kaart is hersteld.",
+      "reconfigure_successful": "Klaar. De stofzuiger zijn IP-adres, token en regio matchen nu met deze in je Xiaomi-account.",
+      "reconfigure_device_not_found": "Deze stofzuiger is niet in je Xiaomi-account, dus niets werd gewijzigd.",
+      "reconfigure_reauth_required": "De Xiaomi-login is vervallen en kon niet automatisch hernieuwd worden. Authenticeer deze integratie opnieuw, en probeer het dan nog eens. Niets werd gewijzigd.",
+      "reconfigure_local_only": "Deze stofzuiger werd toegevoegd door middel van een IP-adres en token. Er is dus geen Xiaomi-account om de gegevens te vernieuwen. Niets werd gewijzigd.",
       "login_failed": "Xiaomi weigert dit ({reason}). Controleer uw e-mail en wachtwoord en probeer het opnieuw.",
-      "no_devices": "Geen ondersteunde stofzuigers op deze account.",
-      "unsupported_model": "Dit model wordt nog niet ondersteund ({model})."
+      "login_verification_required": "Xiaomi heeft deze login geblokkeerd en wilt het account verifiëren. Log in via account.xiaomi.com (of the Xiaomi Home app), voltooi de verificatie en probeer het dan opnieuw.",
+      "no_devices": "Geen ondersteunde stofzuigers op dit account.",
+      "unsupported_model": "{model} werd gevonden, en deze is nog niet ondersteund. Open een verzoek voor een nieuw model op de GitHub-pagina van deze integration. Vergeet niet om de naam van het mdel te vermelden."
+    }
+  },
+    "options": {
+    "step": {
+      "miot_oauth_method": {
+        "title": "Koppel Xiaomi OAuth",
+        "description": "Nadat je toegang hebt goedgekeurd, zal Xiaomi je browser naar homeassistant.local:8123 sturen. Kies hoe je wilt afronden.",
+        "menu_options": {
+          "miot_oauth_auth": "Koppel automatisch (dit apparaat kan homeassistant.local:8123 automatisch openen)",
+          "miot_oauth_code": "Plak de code"
+        }
+      },
+      "miot_oauth_auth": {
+        "title": "Koppel Xiaomi OAuth",
+        "description": "Open de Xiaomi OAuth link. Home Assistant zal automatisch verderdoen zodra Xiaomi klaar is.",
+        "data": {}
+      },
+      "miot_oauth_code": {
+        "title": "Paste Xiaomi OAuth code",
+        "description": "Het automatisch terugsturen is niet gelukt. Open deze link, sta toegang toe en plak dan de code uit de adresbalk (na 'CODE=' en voor '&'):\n\n{authorize_url}",
+        "data": {
+          "code": "OAuth code"
+        }
+      },
+      "miot_oauth_finish": {
+        "title": "Xiaomi OAuth gekoppeld",
+        "description": "De real-time kaart koppeling is klaar."
+      }
+    },
+    "error": {
+      "oauth_failed": "Xiaomi OAuth mislukt. Probeer de link opnieuw of plak de code manueel.",
+      "oauth_region_failed": "Het is niet gelukt om de Xiaomi OAuth regio af te leiden op basis van deze code."
+    },
+    "progress": {
+      "miot_oauth_auth": "Open [Xiaomi OAuth]({authorize_url}) in een nieuwe tab. Na goedkeuring zal Xiaomi terugkeren naar Home Assistant en deze stap zal automatisch verdergaan."
+    },
+    "abort": {
+      "oauth_local_only": "Deze stofzuiger werd enkel lokaal toegevoegd, en het heeft dus geen Xiaomi Cloud sessie om aan gekoppeld te worden."
+    }
+  },
+  "issues": {
+    "oauth_missing": {
+      "title": "Zet de real-time live kaart aan",
+      "fix_flow": {
+        "step": {
+          "link": {
+            "title": "Koppel Xiaomi OAuth",
+            "description": "Je stofzuiger werkt, maar de kaart wordt slechts traag vernieuwd. Koppel Xiaomi OAuth om real-time (MQTT) live kaarten te krijgen. Open de link, keur toegang goed en plak dan de code uit de adresbalk (na 'CODE=' en voor '&'):\n\n{authorize_url}",
+            "data": {
+              "code": "OAuth code"
+            }
+          }
+        },
+        "error": {
+          "oauth_failed": "Xiaomi OAuth mislukt. Probeer de link opnieuw of plak de code manueel.",
+          "oauth_region_failed": "Het is niet gelukt om de Xiaomi OAuth regio af te leiden op basis van deze code."
+        },
+        "abort": {
+          "entry_gone": "Deze stofzuiger is niet langer ingesteld."
+        }
+      }
     }
   },
   "entity": {
@@ -80,13 +187,48 @@
           "cleaning": "Aan het schoonmaken",
           "paused": "Gepauzeerd",
           "idle": "Inactief",
-          "returning": "Keert terug naar station",
-          "docked": "In station",
+          "returning": "Keert terug naar dock",
+          "docked": "Gedockt",
           "error": "Fout"
+        }
+      },
+      "base_station_status": {
+        "name": "Basisstation status",
+        "state": {
+          "idle": "Inactief",
+          "drying": "Drogen van dweilen",
+          "washing_mops": "Wassen van dweilen",
+          "dust_collection": "Stof verzamelen",
+          "unknown": "Onbekend"
+        }
+      },
+      "sewage_tank_status": {
+        "name": "Vuilwatertank",
+        "state": {
+          "not_full": "Niet vol",
+          "full": "Vol",
+          "unknown": "Onbekend"
+        }
+      },
+      "water_tank_status": {
+        "name": "Properwatertank",
+        "state": {
+          "not_empty": "Niet leeg",
+          "empty": "Leeg",
+          "unknown": "Onbekend"
         }
       },
       "battery": {
         "name": "Batterij"
+      },
+      "door_state": {
+        "name": "Stof/waterbak",
+        "state": {
+          "none": "Geen",
+          "dust_box": "Stofbak",
+          "water_box": "Waterbak",
+          "two_in_one": "Twee-in-één"
+        }
       },
       "clean_area": {
         "name": "Schoongemaakt oppervlak"
@@ -98,16 +240,36 @@
         "name": "Levensduur hoofdborstel"
       },
       "side_brush_life": {
-        "name": "Levensduur bijborstel"
+        "name": "Levensduur zijborstel"
       },
       "filter_life": {
         "name": "Levensduur filter"
       },
       "mop_life": {
-        "name": "Levensduur zwabber"
+        "name": "Levensduur dweil"
+      },
+      "dust_bag_life": {
+        "name": "Levensduur stofzak"
+      },
+      "detergent_life": {
+        "name": "Levensduur schoonmaakmiddel"
+      },
+      "drying_progress": {
+        "name": "Voortgang dweilen drogen"
+      },
+      "dry_left_time": {
+        "name": "Resterende tijd drogen van dweilen"
       }
     },
     "select": {
+     "drying_time": {
+        "name": "Duurtijd drogen van dweilen",
+        "state": {
+          "2_hours": "2 uur",
+          "3_hours": "3 uur",
+          "4_hours": "4 uur"
+        }
+      },
       "fan_speed": {
         "name": "Ventilatorsnelheid",
         "state": {
@@ -131,7 +293,7 @@
           "2": "Standaard",
           "3": "Krachtig",
           "close": "Sluiten",
-          "one": "Één",
+          "one": "Eén",
           "two": "Twee",
           "three": "Drie",
           "forth": "Vier",
@@ -159,7 +321,7 @@
           "gear_2": "Snelheid 2",
           "gear_3": "Snelheid 3",
           "close": "Sluiten",
-          "one": "Één",
+          "one": "Eén",
           "two": "Twee",
           "three": "Drie",
           "hig": "Hoog",
@@ -175,40 +337,40 @@
           "silent": "Stil",
           "basic": "Standaard",
           "strong": "Sterk",
-          "full_speed": "Volledige snelheid (Maximum)",
+          "full_speed": "Volledige snelheid (maximum)",
           "auto": "Automatisch",
           "sweep": "Vegen",
-          "sweep_and_mop": "Vegen en zwabben",
-          "mop": "Zwabben",
+          "sweep_and_mop": "Vegen en dweilen",
+          "mop": "Dweilen",
           "medium": "Gemiddeld",
-          "sweepandmop": "Vegen en zwabben",
-          "sweep_then_mop": "Eerst vegen, dan zwabben",
-          "sweep_mop": "Vegen en zwabben",
-          "sweep_before_mopping": "Voor het zwabben vegen"
+          "sweepandmop": "Vegen en dweilen",
+          "sweep_then_mop": "Eerst vegen, dan dweilen",
+          "sweep_mop": "Vegen en dweilen",
+          "sweep_before_mopping": "Voor het dweilen vegen"
         }
       },
       "sweep_type": {
-        "name": "Vegtype",
+        "name": "Veegtype",
         "state": {
-          "global": "Globaal",
-          "mop": "Zwabben",
-          "edge": "Randvolgeling",
-          "area": "Gebied",
+          "global": "Algemeen",
+          "mop": "Dweilen",
+          "edge": "Volg de randen",
+          "area": "Zone",
           "point": "Punt",
           "remote": "Afstandsbediening",
-          "explore": "Kaartmaking",
-          "room": "Kameraanpassing",
-          "floor": "Vloeraanpassing",
+          "explore": "Verkennen",
+          "room": "Kamer",
+          "floor": "Verdiep",
           "control": "Afstandsbediening",
-          "total": "Algehele schoonmaak",
+          "total": "Reinig alles",
           "wall": "Randschoonmaak",
-          "zone": "Zonereinigung",
-          "corner": "Randvolgeling",
+          "zone": "Zonereiniging",
+          "corner": "Volg de hoeken",
           "man": "Afstandsbediening",
-          "roomprefer": "Kameraanpassing",
-          "materialprefer": "Vloeraanpassing",
-          "maping": "Kaartmaking bezig",
-          "gocharging": "Terug naar station",
+          "roomprefer": "Pas de kamer aan",
+          "materialprefer": "Pas type vloer aan",
+          "maping": "Kaart wordt aangemaakt",
+          "gocharging": "Terug naar dock",
           "remotecontrol": "Afstandsbediening",
           "selectroom": "Kamer",
           "customclean": "Aangepaste schoonmaak",
@@ -230,6 +392,20 @@
       },
       "alarm": {
         "name": "Stofzuiger zoeken (piep)"
+      },
+      "auto_mop_dry": {
+        "name": "Automatisch drogen van dweilen"
+      },
+      "mop_drying": {
+        "name": "Drogen van dweilen"
+      }
+    },
+    "button": {
+      "wash_mops": {
+        "name": "Wassen van dweilen"
+      },
+      "empty_dust_bin": {
+        "name": "Stofbak leegmaken"
       }
     },
     "number": {
@@ -241,11 +417,21 @@
   "services": {
     "clean_segment": {
       "name": "Kamer(s) schoonmaken",
-      "description": "Begin met schoonmaken van een of meer kamers op basis van hun kaartkaamer-ID.",
+      "description": "Begin met schoonmaken van een of meer kamers op basis van hun kamer-ID.",
       "fields": {
         "segments": {
           "name": "Kamers",
-          "description": "Lijst met kaameraID's om schoon te maken (van het attribuut \"rooms\" van de kaartcamera)."
+          "description": "Lijst met kamer-ID's om schoon te maken (van het attribuut \"rooms\" van de kaartcamera)."
+        }
+      }
+    },
+    "refresh_map": {
+      "name": "Kaart vernieuwen",
+      "description": "Kort de stofzuiger starten zodat deze het dock verlaat en een nieuwe kaart uploadt. Daarna wordt de stofzuiger terug naar het dock gestuurd.",
+      "fields": {
+        "confirm_movement": {
+          "name": "Bevestig beweging",
+          "description": "Dit is verplicht. De stofzuiger zal kort het dock verlaten en terugkeren."
         }
       }
     }
