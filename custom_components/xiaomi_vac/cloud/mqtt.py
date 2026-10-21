@@ -231,7 +231,6 @@ class MiotMqttClient:
 
 
 def _parse_message(topic: str, payload: bytes) -> MqttMessage | None:
-    global _RAW_SHAPE_LOGGED
     """Turn a raw MIoT device topic + payload into a MqttMessage.
 
     Topic shapes (verified live in `.scripts/map_mqtt_probe.py`):
@@ -240,6 +239,7 @@ def _parse_message(topic: str, payload: bytes) -> MqttMessage | None:
       device/{did}/state/*                               opaque
     Anything unfamiliar surfaces as kind="other" so callers can log or ignore.
     """
+    global _RAW_SHAPE_LOGGED
     parts = topic.split("/")
     if len(parts) < 4:
         return None
