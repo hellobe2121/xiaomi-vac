@@ -268,10 +268,13 @@ class XiaomiVacCard extends HTMLElement {
     // The map endpoint reflects the MQTT P-frame cadence (~3s) while the
     // vacuum is moving, so poll at that rate then; 8s otherwise. Chained
     // setTimeout (not setInterval) so a slow fetch can never overlap itself.
+    // The generation stops a fetch still in flight across a detach/re-attach
+    // (dashboard edit mode moves cards) from starting a second chain.
+    const gen = this._pollGen = (this._pollGen || 0) + 1;
     const tick = () => {
       this._poll = setTimeout(() => {
         Promise.resolve(this._refreshMap()).finally(() => {
-          if (this.isConnected) tick();
+          if (this.isConnected && this._pollGen === gen) tick();
         });
       }, this._pollMs());
     };
