@@ -630,6 +630,7 @@ class MapFetcher:
                 _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
                 attempt.outcome = "undecryptable"
                 return None
+        attempt.key_type = self.last_key_type
         if self._brand == "ijai" and self.last_key_type == "model":
             attempt.payload_kind = "json" if isinstance(unpacked, str) else "protobuf"
         return self._result_from_unpacked(unpacked, attempt)
@@ -804,7 +805,6 @@ class MapFetcher:
             vector, vector.get("map_id"), attributes,
         )
         attempt.outcome = "rendered"
-        attempt.key_type = self.last_key_type
         # Remember the frame bytes as the MQTT live-render base; the live path
         # re-renders these with a patched vacuum position (see
         # with_vacuum_position).
