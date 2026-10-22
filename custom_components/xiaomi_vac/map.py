@@ -200,12 +200,11 @@ class MapFetcher:
         self.last_key_type: str | None = None
         # Dotless cropped base for the live P-frame fast path; populated by
         # every successful _result_from_unpacked (see there for details).
-        self._live_base: Image.Image | None = None
-        self._live_base_calibration: list[dict] = []
-        self._live_base_offset: tuple[int, int] = (0, 0)
-        self._live_base_vector: dict = {}
-        self._live_base_map_id: int | None = None
-        self._live_base_attrs: dict = {}
+        # One tuple (image, calibration, offset, vector, map_id, attributes),
+        # swapped in a single assignment: the fast path and a full render can
+        # run in different executor threads, and must never see an image from
+        # one render paired with another render's calibration.
+        self._live_base: tuple | None = None
 
     def _get_dreame_enckey(self) -> str | None:
         """Fetch the dreame cloud map encryption key (siid=6/piid=3).
@@ -669,23 +668,22 @@ class MapFetcher:
         Returns None when no base is cached yet — the caller then falls back
         to a full render.
         """
-        base = self._live_base
-        if base is None:
+        snapshot = self._live_base
+        if snapshot is None:
             return None
-        img = base.copy()
-        draw_vacuum_dot(
-            img, pos[0], pos[1], pos[2],
-            self._live_base_calibration, *self._live_base_offset,
+        base, calibration, offset, vector, map_id, base_attrs = snapshot
+        img = draw_vacuum_dot(
+            base.copy(), pos[0], pos[1], pos[2], calibration, *offset,
         )
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        attributes = dict(self._live_base_attrs)
+        attributes = dict(base_attrs)
         attributes["vacuum_position"] = {"x": pos[0], "y": pos[1], "a": pos[2]}
         return MapResult(
             image_png=buf.getvalue(),
             attributes=attributes,
-            vector=self._live_base_vector,
-            map_id=self._live_base_map_id,
+            vector=vector,
+            map_id=map_id,
             content_hash=None,
         )
 
@@ -747,14 +745,12 @@ class MapFetcher:
         # P-frame fast path (render_position_only): position-only frames stamp
         # a dot on a copy of this image instead of re-running the full parse.
         # Copy the calibration dicts — the shift below mutates them in place.
-        self._live_base = cropped.copy()
-        self._live_base_calibration = [
+        # Published as one snapshot once the attributes exist (further down).
+        live_base_img = cropped.copy()
+        live_base_calibration = [
             {**cp, "map": dict(cp["map"]), "vacuum": dict(cp["vacuum"])}
             for cp in calibration
         ]
-        self._live_base_offset = (off_x, off_y)
-        self._live_base_vector = vector
-        self._live_base_map_id = vector.get("map_id")
 
         # The parser no longer draws the dot (see _DRAWABLES); stamp it here so
         # full renders look exactly as before.
@@ -788,7 +784,10 @@ class MapFetcher:
         }
         # Attributes snapshot for the P-frame fast path (render_position_only);
         # it re-uses everything here except vacuum_position.
-        self._live_base_attrs = attributes
+        self._live_base = (
+            live_base_img, live_base_calibration, (off_x, off_y),
+            vector, vector.get("map_id"), attributes,
+        )
         attempt.outcome = "rendered"
         attempt.key_type = self.last_key_type
         # Remember the frame bytes as the MQTT live-render base; the live path
