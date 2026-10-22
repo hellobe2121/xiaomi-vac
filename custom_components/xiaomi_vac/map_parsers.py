@@ -218,12 +218,40 @@ def ijai_decrypt(
     return zlib.decompress(aes_decryptor.aes_decrypt(raw, key, hex_key))
 
 
-def ijai_unpack_any_key(raw: bytes, **kw) -> tuple[bytes, str]:
-    """Decrypt an ijai blob trying the likely key type first, then the other.
+def ijai_model_key_unpack(raw: bytes, model: str, device_id: str) -> bytes | str:
+    """Decrypt an ijai-routed blob with the key derived from model and device id.
+
+    @param raw: base64 text, or a JSON `{"data": "<base64>"}` wrapper of it.
+    @param model: full model string, e.g. "xiaomi.vacuum.b106eu".
+    @param device_id: the cloud device id.
+    @returns: RobotMap protobuf bytes, or the JSON text of a Xiaomi map.
+    @throws ValueError: when the payload is neither.
+    """
+    import json
+
+    from .xiaomi_json_decrypt import decrypt_with_model_key
+
+    try:
+        wrapper = json.loads(raw)
+    except ValueError:
+        wrapper = None
+    if isinstance(wrapper, dict):
+        raw = wrapper["data"]
+    plain = decrypt_with_model_key(base64.b64decode(raw, validate=True), model, device_id)
+    if plain.startswith(b"\x08"):
+        return plain
+    text = plain.decode("utf-8")
+    if not isinstance(json.loads(text), dict):
+        raise ValueError("model-key payload is neither an ijai protobuf nor a JSON object")
+    return text
+
+
+def ijai_unpack_any_key(raw: bytes, **kw) -> tuple[bytes | str, str]:
+    """Decrypt an ijai blob trying the likely key type first, then the other, then the model key.
 
     @param raw: the downloaded blob.
     @param kw: wifi_sn, owner_id, device_id, model, device_mac.
-    @returns: (unpacked bytes, key type that worked: "hex" or "text").
+    @returns: (unpacked bytes, or JSON text from the model key; key type "hex", "text" or "model").
     """
     first = ijai_hex_key_first(kw["model"])
     errors = []
@@ -232,6 +260,12 @@ def ijai_unpack_any_key(raw: bytes, **kw) -> tuple[bytes, str]:
             return ijai_decrypt(raw, hex_key=hex_key, **kw), ("hex" if hex_key else "text")
         except Exception as ex:  # noqa: BLE001
             errors.append(ex)
+    model = kw["model"]
+    if model.startswith("xiaomi.") and len(model[-16:]) == 16:
+        try:
+            return ijai_model_key_unpack(raw, model, kw["device_id"]), "model"
+        except Exception:  # noqa: BLE001
+            pass
     raise errors[0]
 
 

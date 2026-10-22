@@ -12,8 +12,10 @@ class SlotAttempt:
     url_obtained: bool = False
     blob_bytes: int | None = None
     outcome: str = "incomplete"
-    # ijai only: "hex" or "text", the AES key type that decrypted this slot.
+    # ijai only: "hex", "text" or "model", the AES key type that decrypted this slot.
     key_type: str | None = None
+    # ijai model-key only: "json" when the decrypted payload is Xiaomi JSON.
+    payload_kind: str | None = None
 
     def as_dict(self) -> dict:
         return {

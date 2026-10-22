@@ -415,3 +415,64 @@ def test_ijai_slot_failing_padding_is_downloaded_once_more(
     assert (result is not None) is second_copy_is_good
     assert f.last_attempt.outcome == outcome
     assert [c[0] for c in cloud.calls].count("download") == 2
+
+
+# --- ijai model-derived key (#69, #4) --------------------------------------
+def _encrypt_with_model_key(plain: bytes, *, model: str, device_id: str) -> bytes:
+    """Encrypt the way Xiaomi's SDK does: key = MD5(AES-CBC(model_key + device_id)), base64 text."""
+    import base64
+    import hashlib
+    import zlib
+
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad
+
+    iv = b"ABCDEF1234123412"
+    model_key = model[-16:].encode("latin1")
+    material = AES.new(model_key, AES.MODE_CBC, iv).encrypt(
+        pad(model_key + device_id.encode("latin1"), AES.block_size))
+    key = hashlib.md5(material).digest()
+    body = AES.new(key, AES.MODE_CBC, iv).encrypt(pad(zlib.compress(plain), AES.block_size))
+    return base64.b64encode(body)
+
+
+def _b106eu_fetcher(cloud):
+    return MapFetcher(
+        cloud, server="de", user_id="1", device_id="2",
+        model="xiaomi.vacuum.b106eu", mac="AA:BB:CC:DD:EE:FF", wifi_sn="12345/ABCDE12345FGHIJ",
+        parser_brand="ijai")
+
+
+def test_ijai_slot_only_the_model_derived_key_opens_renders_with_key_type_model(monkeypatch):
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    protobuf = b"\x08\x01robotmap"
+    blob = _encrypt_with_model_key(protobuf, model="xiaomi.vacuum.b106eu", device_id="2")
+    f = _b106eu_fetcher(FakeCloud(blob=blob))
+    seen = []
+    f._parser.parse = lambda unpacked: seen.append(unpacked) or _renderable_md()
+
+    result = f.fetch("0")
+
+    assert result is not None
+    assert f.last_attempt.outcome == "rendered"
+    assert f.last_attempt.key_type == "model"
+    assert seen == [protobuf]
+
+
+def test_ijai_slot_the_account_keys_open_renders_with_key_type_hex(monkeypatch):
+    import time
+
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    protobuf = b"\x08\x01robotmap"
+    f = _b106eu_fetcher(FakeCloud())
+    f._cloud.blob = _encrypt_ijai(protobuf, hex_key=True, **f._unpack_kw)
+    seen = []
+    f._parser.parse = lambda unpacked: seen.append(unpacked) or _renderable_md()
+
+    result = f.fetch("0")
+
+    assert result is not None
+    assert f.last_attempt.key_type == "hex"
+    assert seen == [protobuf]

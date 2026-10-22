@@ -50,11 +50,22 @@ def decrypt_xiaomi_json_map(raw: bytes, model: str, device_id: str) -> str:
         raise ValueError(f"unsupported xiaomi map blob version: {envelope.get('version')!r}")
 
     ciphertext = base64.b64decode(envelope["data"])
+    return decrypt_with_model_key(ciphertext, model, device_id).decode("utf-8")
 
+
+def decrypt_with_model_key(ciphertext: bytes, model: str, device_id: str) -> bytes:
+    """AES-CBC decrypt and zlib-decompress with the key derived from model and device id.
+
+    @param ciphertext: the raw AES ciphertext.
+    @param model: full model string; its last 16 characters seed the key.
+    @param device_id: the cloud device id.
+    @returns: the decompressed plaintext bytes.
+    @throws ValueError: on a wrong key length or bad padding; zlib.error on a bad stream.
+    """
     model_key = model[-16:].encode("latin1")
     original_work = model_key + device_id.encode("latin1")
     enc_key = AES.new(model_key, AES.MODE_CBC, _IV).encrypt(pad(original_work, AES.block_size))
     decrypt_key = hashlib.md5(enc_key).digest()
 
     plaintext = unpad(AES.new(decrypt_key, AES.MODE_CBC, _IV).decrypt(ciphertext), AES.block_size)
-    return zlib.decompress(plaintext).decode("utf-8")
+    return zlib.decompress(plaintext)

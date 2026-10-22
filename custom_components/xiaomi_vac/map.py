@@ -198,6 +198,8 @@ class MapFetcher:
         self.last_attempt: SlotAttempt | None = None
         # ijai only: which AES key type ("hex" or "text") last decrypted a blob.
         self.last_key_type: str | None = None
+        # ijai only: Xiaomi JSON text the model-derived key yielded on the last fetch.
+        self.last_json_text: str | None = None
         # Dotless cropped base for the live P-frame fast path; populated by
         # every successful _result_from_unpacked (see there for details).
         # One tuple (image, calibration, offset, vector, map_id, attributes),
@@ -580,6 +582,7 @@ class MapFetcher:
                           "found" if self._enckey else "not found (unencrypted or unavailable)")
         attempt = self.last_attempt = SlotAttempt(slot=slot)
         self.last_key_type = None
+        self.last_json_text = None
         try:
             url = self._cloud.map_url(self._server, self._device_id, slot, self._endpoint)
         except CloudUnreachable:
@@ -608,6 +611,7 @@ class MapFetcher:
             except Exception as ex:  # noqa: BLE001
                 if not retried and self._brand == "ijai" and "Padding is incorrect" in str(ex):
                     retried = True
+                    _LOGGER.debug("Map at slot %s failed padding; downloading it once more", slot)
                     time.sleep(_IJAI_PADDING_RETRY_WAIT)
                     raw = self._cloud.download(url)
                     attempt.blob_bytes = len(raw) if raw else 0
@@ -627,6 +631,13 @@ class MapFetcher:
                 _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
                 attempt.outcome = "undecryptable"
                 return None
+        if self._brand == "ijai" and isinstance(unpacked, str):
+            attempt.payload_kind = "json"
+            attempt.key_type = self.last_key_type
+            attempt.outcome = "json_payload"
+            self.last_json_text = unpacked
+            _LOGGER.debug("Model-key map at slot %s is Xiaomi JSON; not rendered by the ijai reader", slot)
+            return None
         return self._result_from_unpacked(unpacked, attempt)
 
     def decode_live_frame(self, value: str) -> bytes | None:
