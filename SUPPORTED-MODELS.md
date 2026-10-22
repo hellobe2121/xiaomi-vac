@@ -100,6 +100,6 @@ Total supported models: 86
 - `xiaomi.vacuum.ov31gl`
 - `xiaomi.vacuum.ov42gl`
 - `xiaomi.vacuum.ov43gb`
-- `xiaomi.vacuum.ov51gl` (Xiaomi Robot Vacuum H40; the map may not render)
+- `xiaomi.vacuum.ov51gl` (Xiaomi Robot Vacuum H40)
 - `xiaomi.vacuum.ov71gl`
 - `xiaomi.vacuum.pv21cn` (Mijia Robot Vacuum 6 Pro; the map may not render)
