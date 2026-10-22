@@ -743,6 +743,7 @@ class XiaomiMapCoordinator(DataUpdateCoordinator[MapResult]):
                     content_hash=live.content_hash,
                     timestamp=live_at,
                 )
+                self._live_position = None
 
             # Prune maps the device no longer lists, but never off a transient
             # empty read (map-reliability Phase 0 eviction decision).

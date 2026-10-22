@@ -1213,3 +1213,66 @@ async def test_mqtt_burst_coalesces_to_single_refresh(hass: HomeAssistant) -> No
         await asyncio.sleep(0.05)
 
     coord.async_refresh.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Live vacuum position: newest source wins
+# ---------------------------------------------------------------------------
+
+_MQTT_VACUUM = {"x": 100.0, "y": 200.0, "a": 30}
+_DECODED_VACUUM = {"x": 5.0, "y": 6.0, "a": 7}
+
+
+def _live_frame_bytes(x: int, y: int, angle: int) -> bytes:
+    """A P-frame header: 4 pad bytes, type 'P', then x, y, angle as signed LE int16."""
+    header = b"\x00" * 4 + b"P" + b"".join(v.to_bytes(2, "little", signed=True) for v in (x, y, angle))
+    return header.ljust(27, b"\x00")
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        (("mqtt", "refresh"), _DECODED_VACUUM),
+        (("refresh", "mqtt"), _MQTT_VACUUM),
+    ],
+    ids=["mqtt-then-refresh", "refresh-then-mqtt"],
+)
+async def test_served_vacuum_position_is_the_newest_of_mqtt_and_decoded_map(
+    hass: HomeAssistant, order: tuple[str, str], expected: dict,
+) -> None:
+    """MH1: the served vector's vacuum position follows whichever of MQTT frame or full map refresh came last."""
+    coord = _map_coord(hass)
+    coord._device.map_list.return_value = [{"id": 42, "cur": True, "name": "Ground Floor"}]
+
+    decoded = MapResult(
+        image_png=b"png-42",
+        attributes={"map_id": 42},
+        vector={"map_id": 42, "vacuum": dict(_DECODED_VACUUM)},
+        map_id=42,
+        content_hash="hash-decoded",
+    )
+    fetcher = MagicMock()
+    fetcher._brand = "dreame"
+    fetcher._overlay_units = 1
+    fetcher.fetch.return_value = decoded
+    fetcher.decode_live_frame.return_value = _live_frame_bytes(100, 200, 30)
+    fetcher._result_from_unpacked.return_value = SimpleNamespace(image_png=b"live", attributes={})
+    coord._fetcher = fetcher
+
+    async def _exec(fn, *a):
+        return fn(*a)
+
+    with (
+        patch.object(coord, "_ensure_cache", new=AsyncMock(return_value=_FakeCache())),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+    ):
+        if order == ("mqtt", "refresh"):
+            await coord._async_on_live_frame("frame")
+            coord.data = await coord._async_update_data()
+        else:
+            coord.data = await coord._async_update_data()
+            await coord._async_on_live_frame("frame")
+
+    assert coord.data.vector["vacuum"] == expected
+    active = next(m for m in coord.data.maps if m["active"])
+    assert active["vacuum"] == expected
