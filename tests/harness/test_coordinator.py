@@ -1276,3 +1276,66 @@ async def test_served_vacuum_position_is_the_newest_of_mqtt_and_decoded_map(
     assert coord.data.vector["vacuum"] == expected
     active = next(m for m in coord.data.maps if m["active"])
     assert active["vacuum"] == expected
+
+
+async def test_p_frame_inside_throttle_moves_position_without_full_render_and_next_render_uses_latest_i_frame(
+    hass: HomeAssistant,
+) -> None:
+    """MH4: a P-frame inside the render throttle moves the served position with no full render; the next full render draws from the latest I-frame."""
+    coord = _map_coord(hass)
+    coord.data = MapResult(
+        image_png=b"base",
+        attributes={},
+        vector={"map_id": 1, "vacuum": dict(_DECODED_VACUUM)},
+        map_id=1,
+        content_hash="hash-base",
+    )
+
+    def _frame(kind: bytes, x: int, y: int, tag: int) -> bytes:
+        header = b"\x00" * 4 + kind + b"".join(v.to_bytes(2, "little", signed=True) for v in (x, y, 0))
+        return header.ljust(26, b"\x00") + bytes([tag])
+
+    i_frame_1 = _frame(b"I", 10, 20, 1)
+    p_frame_1 = _frame(b"P", 11, 21, 2)
+    i_frame_2 = _frame(b"I", 30, 40, 3)
+    p_frame_2 = _frame(b"P", 31, 41, 4)
+    frames = {"i1": i_frame_1, "p1": p_frame_1, "i2": i_frame_2, "p2": p_frame_2}
+
+    fetcher = MagicMock()
+    fetcher._brand = "dreame"
+    fetcher._overlay_units = 1
+    fetcher.decode_live_frame.side_effect = lambda value: frames[value]
+    fetcher.with_vacuum_position.side_effect = lambda base, pos: base
+    fetcher._result_from_unpacked.return_value = SimpleNamespace(image_png=b"full", attributes={})
+    fetcher.render_position_only.return_value = SimpleNamespace(image_png=b"dot", attributes={})
+    coord._fetcher = fetcher
+
+    clock = [1000.0]
+    fake_time = SimpleNamespace(monotonic=lambda: clock[0])
+
+    async def _exec(fn, *a):
+        return fn(*a)
+
+    with (
+        patch("custom_components.xiaomi_vac.map_coordinator.time", fake_time),
+        patch.object(hass, "async_add_executor_job", new=AsyncMock(side_effect=_exec)),
+    ):
+        await coord._async_on_live_frame("i1")
+        assert fetcher._result_from_unpacked.call_count == 1
+        assert fetcher._result_from_unpacked.call_args.args[0] == i_frame_1
+
+        clock[0] += 2.0
+        await coord._async_on_live_frame("p1")
+        assert fetcher._result_from_unpacked.call_count == 1
+        fetcher.render_position_only.assert_called_once_with((11, 21, 0))
+        assert coord.data.vector["vacuum"] == {"x": 11.0, "y": 21.0, "a": 0}
+
+        clock[0] += 10.0
+        await coord._async_on_live_frame("i2")
+        assert fetcher._result_from_unpacked.call_count == 2
+        assert fetcher._result_from_unpacked.call_args.args[0] == i_frame_2
+
+        clock[0] += 2.0
+        await coord._async_on_live_frame("p2")
+        assert fetcher._result_from_unpacked.call_count == 2
+        assert coord.data.vector["vacuum"] == {"x": 31.0, "y": 41.0, "a": 0}

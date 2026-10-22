@@ -56,6 +56,19 @@ def test_c101_core_reports_docked_for_dock_station_statuses(monkeypatch, raw_sta
     assert status.activity == expected_activity
 
 
+@pytest.mark.parametrize("model", ["dreame.vacuum.r2211o", "dreame.vacuum.p2149o"])
+def test_dreame_station_status_13_reads_as_docked(monkeypatch, model):
+    device_mod = load_device_module(monkeypatch)
+    device = device_mod.IjaiVacuumDevice("host", "token", model)
+    status_prop = device.core.status
+    FakeMiotDevice.property_values = {(status_prop.siid, status_prop.piid): 13}
+
+    status = device.status()
+
+    assert status.raw_status == 13
+    assert status.activity == "docked"
+
+
 def test_status_raises_when_required_prop_fails(monkeypatch):
     """A failing status read must raise DeviceCommunicationError, not return idle."""
     device_mod = load_device_module(monkeypatch)

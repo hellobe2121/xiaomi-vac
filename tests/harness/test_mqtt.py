@@ -69,6 +69,20 @@ def test_parse_malformed_json_does_not_raise() -> None:
     assert msg.value is None
 
 
+def test_parse_nested_properties_value_carries_the_map_frame() -> None:
+    """MH3: a frame in params.properties[0].value is parsed into the message value."""
+    topic = "device/did123/up/properties_changed/6/1"
+    payload = b'{"params": {"siid": 6, "piid": 1, "properties": [{"piid": 1, "value": "FRAME-DATA"}]}}'
+
+    msg = _parse_message(topic, payload)
+
+    assert msg is not None
+    assert msg.kind == "property"
+    assert msg.siid == 6
+    assert msg.piid == 1
+    assert msg.value == "FRAME-DATA"
+
+
 # ---------------------------------------------------------------------------
 # MiotMqttClient helpers
 # ---------------------------------------------------------------------------
