@@ -270,7 +270,7 @@ class MapFetcher:
                 unpacked = self._parser.unpack_map(raw, **self._unpack_kw)
                 self.last_key_type = "hex" if ijai_hex_key_first(self._model) else "text"
                 return unpacked
-            except ValueError:
+            except (ValueError, zlib.error):
                 unpacked, self.last_key_type = ijai_unpack_any_key(raw, **self._unpack_kw)
                 return unpacked
         if self._brand == "viomi" and raw.startswith(b"\x1f\x8b"):
