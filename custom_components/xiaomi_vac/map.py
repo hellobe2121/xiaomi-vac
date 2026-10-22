@@ -198,8 +198,8 @@ class MapFetcher:
         self.last_attempt: SlotAttempt | None = None
         # ijai only: which AES key type ("hex" or "text") last decrypted a blob.
         self.last_key_type: str | None = None
-        # ijai only: Xiaomi JSON text the model-derived key yielded on the last fetch.
-        self.last_json_text: str | None = None
+        # ijai only: Xiaomi parser for model-key JSON payloads; built on first use.
+        self._json_parser = None
         # Dotless cropped base for the live P-frame fast path; populated by
         # every successful _result_from_unpacked (see there for details).
         # One tuple (image, calibration, offset, vector, map_id, attributes),
@@ -582,7 +582,6 @@ class MapFetcher:
                           "found" if self._enckey else "not found (unencrypted or unavailable)")
         attempt = self.last_attempt = SlotAttempt(slot=slot)
         self.last_key_type = None
-        self.last_json_text = None
         try:
             url = self._cloud.map_url(self._server, self._device_id, slot, self._endpoint)
         except CloudUnreachable:
@@ -631,13 +630,8 @@ class MapFetcher:
                 _LOGGER.debug("Could not decrypt map at slot %s (starts %r): %s", slot, raw[:16], ex)
                 attempt.outcome = "undecryptable"
                 return None
-        if self._brand == "ijai" and isinstance(unpacked, str):
-            attempt.payload_kind = "json"
-            attempt.key_type = self.last_key_type
-            attempt.outcome = "json_payload"
-            self.last_json_text = unpacked
-            _LOGGER.debug("Model-key map at slot %s is Xiaomi JSON; not rendered by the ijai reader", slot)
-            return None
+        if self._brand == "ijai" and self.last_key_type == "model":
+            attempt.payload_kind = "json" if isinstance(unpacked, str) else "protobuf"
         return self._result_from_unpacked(unpacked, attempt)
 
     def decode_live_frame(self, value: str) -> bytes | None:
@@ -704,26 +698,36 @@ class MapFetcher:
         Shared by the cloud fetch path and the MQTT live-map path. On success
         remembers the unpacked bytes as the live-render base.
         """
-        carpets = parse_carpets(unpacked) if self._brand == "xiaomi" else []
-        path_segments = parse_path(unpacked) if self._brand == "xiaomi" else []
+        brand, parser = self._brand, self._parser
+        ijai_grid, json_grid, units = self._ijai_grid, self._json_grid, self._overlay_units
+        if self._brand == "ijai" and isinstance(unpacked, str):
+            if self._json_parser is None:
+                self._json_parser = make_parser(
+                    "xiaomi", self._model, ColorsPalette(), Sizes(), _DRAWABLES, ImageConfig(), []
+                )
+            brand, parser = "xiaomi", self._json_parser
+            ijai_grid, json_grid = has_ijai_grid(brand), has_json_grid(brand)
+            units = overlay_units_per_metre(brand)
+        carpets = parse_carpets(unpacked) if brand == "xiaomi" else []
+        path_segments = parse_path(unpacked) if brand == "xiaomi" else []
         try:
             payload = unpacked
-            if self._json_grid:
+            if json_grid:
                 payload = json.loads(unpacked)
                 if not map_vector.json_room_map(payload):
                     payload.pop("map_room_info", None)
             md = None
-            if self._brand == "viomi":
+            if brand == "viomi":
                 md = self._parse_viomi_json_trailer(unpacked)
             if md is None:
-                md = self._parser.parse(payload)
+                md = parser.parse(payload)
                 self._filter_dreame_stale_rooms(md, unpacked)
             vector = map_vector.vector_map(
-                md, _vector_source(self._parser, payload, self._ijai_grid),
-                ijai_grid=self._ijai_grid,
-                json_grid=self._json_grid,
-                dreame_grid=(self._brand == "dreame"),
-                units_per_metre=self._overlay_units,
+                md, _vector_source(parser, payload, ijai_grid),
+                ijai_grid=ijai_grid,
+                json_grid=json_grid,
+                dreame_grid=(brand == "dreame"),
+                units_per_metre=units,
                 carpets=carpets,
                 path_segments=path_segments,
             )

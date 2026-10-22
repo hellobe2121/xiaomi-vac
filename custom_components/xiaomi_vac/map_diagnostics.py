@@ -14,17 +14,20 @@ class SlotAttempt:
     outcome: str = "incomplete"
     # ijai only: "hex", "text" or "model", the AES key type that decrypted this slot.
     key_type: str | None = None
-    # ijai model-key only: "json" when the decrypted payload is Xiaomi JSON.
+    # ijai model-key only: "protobuf" or "json", the kind of payload the key yielded.
     payload_kind: str | None = None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "slot": self.slot,
             "url_obtained": self.url_obtained,
             "blob_bytes": self.blob_bytes,
             "outcome": self.outcome,
             "key_type": self.key_type,
         }
+        if self.payload_kind is not None:
+            out["payload_kind"] = self.payload_kind
+        return out
 
 
 @dataclass

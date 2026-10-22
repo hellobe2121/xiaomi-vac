@@ -476,3 +476,26 @@ def test_ijai_slot_the_account_keys_open_renders_with_key_type_hex(monkeypatch):
     assert result is not None
     assert f.last_attempt.key_type == "hex"
     assert seen == [protobuf]
+
+
+def test_ijai_slot_whose_model_derived_decrypt_is_xiaomi_json_renders_through_the_xiaomi_reader(monkeypatch):
+    import base64
+    import time
+    import zlib
+
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    cells = bytes([3, 3, 0, 4, 4] * 5)
+    payload = {
+        "map_id": 1, "map_type": 1, "height": 5, "width": 5,
+        "resolution": 50, "origin_x": 0, "origin_y": 0,
+        "map_data": base64.b64encode(zlib.compress(cells)).decode("ascii"),
+        "map_room_info": [{"grid_id": 3, "room_id": 0}, {"grid_id": 4, "room_id": 0}],
+    }
+    blob = _encrypt_with_model_key(
+        json.dumps(payload).encode("utf-8"), model="xiaomi.vacuum.b106eu", device_id="2")
+    f = _b106eu_fetcher(FakeCloud(blob=blob))
+
+    result = f.fetch("0")
+
+    assert result is not None
+    assert {r["id"] for r in result.vector["rooms"]} == {3, 4}
