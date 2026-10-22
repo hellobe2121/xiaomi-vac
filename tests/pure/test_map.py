@@ -180,9 +180,12 @@ def test_vector_map_anchors_absent_room_label_at_bbox_centre():
 
 
 def test_overlay_units_per_metre_only_scales_xiaomi_json_family():
-    """ijai/dreame/viomi/roidmi parsers already report metres."""
+    """xiaomi/dreame parsers report millimetres; the rest metres."""
     assert map_parsers.overlay_units_per_metre("xiaomi") == 1000.0
-    for brand in ("ijai", "dreame", "viomi", "roidmi"):
+    # dreame: header positions and Room bboxes are raw mm (issue #83) —
+    # scaled like the xiaomi JSON-map family.
+    assert map_parsers.overlay_units_per_metre("dreame") == 1000.0
+    for brand in ("ijai", "viomi", "roidmi"):
         assert map_parsers.overlay_units_per_metre(brand) == 1.0
 
 

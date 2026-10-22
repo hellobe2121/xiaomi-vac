@@ -28,8 +28,8 @@ _DEVIATIONS: dict[tuple[str, str | None], tuple[tuple[str, ...], str]] = {
         ("side_brush_life", "main_brush_life", "hypa_life", "mop_life"),
         "hardware-verified consumable life props, beyond the generator's mapping (914f44d)",
     ),
-    ("dreame.p2149o", "core"): (("fan_speeds",), "camelCase spec labels (ModeQuiet) split by hand (0344c89)"),
-    ("dreame.r2211o", "core"): (("fan_speeds",), "camelCase spec labels (ModeQuiet) split by hand (0344c89)"),
+    ("dreame.p2149o", "core"): (("fan_speeds", "status_map"), "camelCase spec labels (ModeQuiet) split by hand (0344c89); 13 charging-completed -> docked, verified live (issue #83)"),
+    ("dreame.r2211o", "core"): (("fan_speeds", "status_map"), "camelCase spec labels (ModeQuiet) split by hand (0344c89); 13 charging-completed -> docked, verified live (issue #83)"),
     ("dreame.r2211o", "room_clean"): (
         ("start_custom", "start_custom_status", "start_custom_props"),
         "2/3 start-room-sweep no-ops, start-custom 4/1 with a selects payload cleans (PR #72, issue #83)",

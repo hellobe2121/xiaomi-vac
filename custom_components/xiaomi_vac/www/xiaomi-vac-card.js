@@ -15,6 +15,9 @@ const ACCENT = {            // state-driven accent (information, not decoration)
   cleaning: "#30b65a", returning: "#e8973a", paused: "#e8973a",
   error: "#e2483d", docked: "#5b6470", idle: "#5b6470", unknown: "#5b6470",
 };
+// states in which the vacuum can be moving — the map poll runs at the MQTT
+// frame cadence (~3s) during these, 8s otherwise (see _pollMs)
+const _ACTIVE_STATES = new Set(["cleaning", "returning", "paused"]);
 // room fill palette (translucent so it reads on light or dark floors)
 const ROOM_TINTS = [
   ["rgba(90,150,220,.30)", "rgba(90,150,220,.85)"],
@@ -262,7 +265,17 @@ class XiaomiVacCard extends HTMLElement {
   }
   getCardSize() { return 10; }   // ~50px/unit; the card is a fixed 520px
   connectedCallback() {
-    this._poll = setInterval(() => this._refreshMap(), 8000);
+    // The map endpoint reflects the MQTT P-frame cadence (~3s) while the
+    // vacuum is moving, so poll at that rate then; 8s otherwise. Chained
+    // setTimeout (not setInterval) so a slow fetch can never overlap itself.
+    const tick = () => {
+      this._poll = setTimeout(() => {
+        Promise.resolve(this._refreshMap()).finally(() => {
+          if (this.isConnected) tick();
+        });
+      }, this._pollMs());
+    };
+    tick();
     // Pause polling while scrolled off-screen (a long dashboard mounts every
     // card at once); _refreshMap also guards on document visibility.
     if ("IntersectionObserver" in window) {
@@ -271,13 +284,19 @@ class XiaomiVacCard extends HTMLElement {
     } else { this._onScreen = true; }
   }
   disconnectedCallback() {
-    clearInterval(this._poll);
+    clearTimeout(this._poll);
     if (this._io) { this._io.disconnect(); this._io = null; }
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
     if (this._anim) { this._anim.destroy(); this._anim = null; }
   }
 
   _base() { return (this._config.vacuum || "").split(".")[1] || ""; }
+  // Poll cadence: fast while the vacuum could be moving (the P-frame stream
+  // updates the served position every ~3s), relaxed otherwise.
+  _pollMs() {
+    const st = this._st(this._config.vacuum);
+    return st && _ACTIVE_STATES.has(st.state) ? 3000 : 8000;
+  }
   _st(eid) { return this._hass && this._hass.states[eid]; }
   _svc(d, s, data = {}) { this._hass.callService(d, s, data); }
   _enabled(name) { return this._config[name] !== false; }
@@ -877,7 +896,11 @@ class XiaomiVacCard extends HTMLElement {
       s += `<g transform="translate(${tx(m.charger.x)},${ty(m.charger.y)})"><circle r="0.32" fill="var(--xv-card)" stroke="#30b65a" stroke-width="0.07"/><path d="M-0.15,0.04 L0,-0.13 L0.15,0.04 M-0.09,0.02 L-0.09,0.15 L0.09,0.15 L0.09,0.02" fill="none" stroke="#30b65a" stroke-width="0.05" stroke-linejoin="round"/></g>`;
     }
     if (m.vacuum) {
-      s += `<g transform="translate(${tx(m.vacuum.x)},${ty(m.vacuum.y)})"><circle r="0.44" fill="var(--xv-accent)" opacity=".16"/><circle r="0.25" fill="var(--xv-accent)" stroke="var(--xv-card)" stroke-width="0.06"/></g>`;
+      // Heading tick: `a` is CCW-from-east in the vacuum's y-up frame; the SVG
+      // space mirrors y, so the tick rotates by -a. Omitted when the frame
+      // carries no angle.
+      const rot = Number.isFinite(m.vacuum.a) ? ` rotate(${(-m.vacuum.a).toFixed(1)})` : "";
+      s += `<g transform="translate(${tx(m.vacuum.x)},${ty(m.vacuum.y)})${rot}"><circle r="0.44" fill="var(--xv-accent)" opacity=".16"/><circle r="0.25" fill="var(--xv-accent)" stroke="var(--xv-card)" stroke-width="0.06"/><path d="M0.25,0 L0.46,0" stroke="var(--xv-card)" stroke-width="0.08" stroke-linecap="round"/></g>`;
     }
     return s + "</svg>";
   }

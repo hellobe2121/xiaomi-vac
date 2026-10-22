@@ -78,7 +78,12 @@ def resolve_active_id(
             return int(active_meta["id"]), "map_list"
         except (TypeError, ValueError):
             pass
-    if mqtt_active_id is not None:
+    if has_map_list and mqtt_active_id is not None:
+        # MQTT curMapId is only meaningful when the device actually has a map
+        # list: there it names which floor is current (fallback when the
+        # list read fails). On single-map profiles (no list capability) the
+        # value is a drifting counter, not a floor id — the r2211o moves it
+        # (46 -> 45) and trusting it filed the same floor under new ids.
         return mqtt_active_id, "mqtt"
     if not has_map_list and not maps_meta:
         return single_map_id, "single_map"

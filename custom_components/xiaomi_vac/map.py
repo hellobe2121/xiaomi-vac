@@ -34,7 +34,7 @@ from .map_parsers import (
     overlay_units_per_metre,
     unpack_kwargs,
 )
-from .xiaomi_map_overlays import draw_overlays, parse_carpets, parse_path
+from .xiaomi_map_overlays import draw_overlays, draw_vacuum_dot, parse_carpets, parse_path
 
 # MIoT property that carries `<object_path>,<enckey>` for cloud-encrypted dreame maps.
 # Verified against Tasshack's dreame-vacuum 2026-07-03 (siid=6/piid=3 = OBJECT_NAME).
@@ -85,9 +85,14 @@ def _patch_parse_rooms() -> None:
 _patch_parse_rooms()
 
 _DRAWABLES = [
-    Drawable.PATH, Drawable.CHARGER, Drawable.VACUUM_POSITION,
+    Drawable.PATH, Drawable.CHARGER,
     Drawable.ROOM_NAMES, Drawable.NO_GO_AREAS, Drawable.VIRTUAL_WALLS,
 ]
+# VACUUM_POSITION is deliberately NOT a parser drawable: the dot is drawn by
+# draw_vacuum_dot() on the cropped base instead. This keeps a dotless base
+# image cached (see _result_from_unpacked) so live P-frames can be rendered
+# position-only without re-running the 1-2s parse+render pipeline. The drawn
+# result is pixel-identical to the parser's dot (same geometry/colours).
 
 
 def _vector_source(parser, unpacked: bytes, ijai_grid: bool) -> bytes:
@@ -193,6 +198,14 @@ class MapFetcher:
         self.last_attempt: SlotAttempt | None = None
         # ijai only: which AES key type ("hex" or "text") last decrypted a blob.
         self.last_key_type: str | None = None
+        # Dotless cropped base for the live P-frame fast path; populated by
+        # every successful _result_from_unpacked (see there for details).
+        self._live_base: Image.Image | None = None
+        self._live_base_calibration: list[dict] = []
+        self._live_base_offset: tuple[int, int] = (0, 0)
+        self._live_base_vector: dict = {}
+        self._live_base_map_id: int | None = None
+        self._live_base_attrs: dict = {}
 
     def _get_dreame_enckey(self) -> str | None:
         """Fetch the dreame cloud map encryption key (siid=6/piid=3).
@@ -643,6 +656,39 @@ class MapFetcher:
             b[off:off + 2] = int(val).to_bytes(2, "little", signed=True)
         return bytes(b)
 
+    def render_position_only(self, pos: tuple[int, int, int]) -> MapResult | None:
+        """Fast path for MQTT live P-frames: stamp the dot on the cached base.
+
+        The P-frame body carries nothing but the new position, so instead of
+        re-running the ~1-2s parse+render pipeline we copy the dotless base
+        image cached by the last full render, draw the dot at ``pos`` and
+        re-encode. Everything not derived from the position (rooms, path,
+        charger, no-go zones, the vector grid) is reused from that render and
+        refreshed by the next full render.
+
+        Returns None when no base is cached yet — the caller then falls back
+        to a full render.
+        """
+        base = self._live_base
+        if base is None:
+            return None
+        img = base.copy()
+        draw_vacuum_dot(
+            img, pos[0], pos[1], pos[2],
+            self._live_base_calibration, *self._live_base_offset,
+        )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        attributes = dict(self._live_base_attrs)
+        attributes["vacuum_position"] = {"x": pos[0], "y": pos[1], "a": pos[2]}
+        return MapResult(
+            image_png=buf.getvalue(),
+            attributes=attributes,
+            vector=self._live_base_vector,
+            map_id=self._live_base_map_id,
+            content_hash=None,
+        )
+
     def _result_from_unpacked(self, unpacked: bytes, attempt: SlotAttempt) -> MapResult | None:
         """Parse + render an unpacked map frame into a MapResult.
 
@@ -667,6 +713,7 @@ class MapFetcher:
                 md, _vector_source(self._parser, payload, self._ijai_grid),
                 ijai_grid=self._ijai_grid,
                 json_grid=self._json_grid,
+                dreame_grid=(self._brand == "dreame"),
                 units_per_metre=self._overlay_units,
                 carpets=carpets,
                 path_segments=path_segments,
@@ -696,6 +743,26 @@ class MapFetcher:
         cropped = draw_overlays(
             cropped, carpets, path_segments, calibration, off_x, off_y
         )
+        # Remember the dotless base + its coordinate mapping for the MQTT
+        # P-frame fast path (render_position_only): position-only frames stamp
+        # a dot on a copy of this image instead of re-running the full parse.
+        # Copy the calibration dicts — the shift below mutates them in place.
+        self._live_base = cropped.copy()
+        self._live_base_calibration = [
+            {**cp, "map": dict(cp["map"]), "vacuum": dict(cp["vacuum"])}
+            for cp in calibration
+        ]
+        self._live_base_offset = (off_x, off_y)
+        self._live_base_vector = vector
+        self._live_base_map_id = vector.get("map_id")
+
+        # The parser no longer draws the dot (see _DRAWABLES); stamp it here so
+        # full renders look exactly as before.
+        vac = md.vacuum_position
+        if vac is not None:
+            cropped = draw_vacuum_dot(
+                cropped, vac.x, vac.y, vac.a, calibration, off_x, off_y
+            )
         buf = io.BytesIO()
         cropped.save(buf, format="PNG")
 
@@ -719,6 +786,9 @@ class MapFetcher:
             "image_width": cropped.width,
             "image_height": cropped.height,
         }
+        # Attributes snapshot for the P-frame fast path (render_position_only);
+        # it re-uses everything here except vacuum_position.
+        self._live_base_attrs = attributes
         attempt.outcome = "rendered"
         attempt.key_type = self.last_key_type
         # Remember the frame bytes as the MQTT live-render base; the live path

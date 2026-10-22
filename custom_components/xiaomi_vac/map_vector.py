@@ -391,6 +391,73 @@ def json_room_map(data: dict) -> dict[int, int]:
     return grid_to_room
 
 
+def extract_dreame_chains(
+    unpacked: bytes, valid_ids: set[int], units_per_metre: float = 1000.0,
+) -> dict[str, Any]:
+    """Trace room outlines from a dreame frame's labelled grid.
+
+    A dreame I-frame is a 27-byte header — pixel_size@17, width@19, height@21,
+    left@23, top@25, all int16 LE with left/top in mm — followed by
+    width*height labelled cells and a JSON trailer. A cell belongs to segment
+    ``cell >> 2`` (1..61); the low two bits are floor/wall flags the renderer
+    reads separately. The RISM sub-map uses a different alphabet and is where
+    this device's junk segments 66-73 live, so the main grid is filtered to
+    ``valid_ids`` (the caller's post-filter ``md.rooms`` keys) regardless.
+
+    Row 0 of the grid is SOUTH: the renderer builds the PIL image flipped
+    (``y = height - img_y - 1``), which matches the card's "grid row increases
+    north" convention, so cells map straight to metres as
+    ``minX + col * resolution`` with ``minX = left * resolution``.
+
+    Returns a partial grid dict in the same shape `extract_grid` emits. Only
+    ``bounds``/``resolution``/``room_chains`` are set: ``grid_rle`` stays
+    empty because dreame segment ids (1-9 here) fall outside the card's
+    hard-coded 10-59 raster band — same tradeoff as `extract_json_grid` on
+    ov71gl, the card paints the traced polygons directly. Chain ids are the
+    real segment ids, so they match ``md.rooms`` / room cleaning targets.
+    Returns {} when the frame is too short, the dimensions are degenerate, or
+    no valid room cells are found.
+    """
+    if len(unpacked) < 27:
+        return {}
+
+    def i16(off: int) -> int:
+        return int.from_bytes(unpacked[off:off + 2], "little", signed=True)
+
+    pixel_size = i16(17)
+    w, h = i16(19), i16(21)
+    if pixel_size <= 0 or w <= 0 or h <= 0 or len(unpacked) < 27 + w * h:
+        _LOGGER.debug("dreame grid: bad header (pixel_size=%d, %dx%d, %d bytes)",
+                      pixel_size, w, h, len(unpacked))
+        return {}
+    left = round(i16(23) / pixel_size)
+    top = round(i16(25) / pixel_size)
+    grid = unpacked[27:27 + w * h]
+
+    masks: dict[int, set] = {}
+    for r in range(h):
+        base = r * w
+        for c in range(w):
+            seg = grid[base + c] >> 2
+            if seg in valid_ids:
+                masks.setdefault(seg, set()).add((c, r))
+    if not masks:
+        _LOGGER.debug("dreame grid: no cells for segments %s", sorted(valid_ids))
+        return {}
+
+    res = pixel_size / units_per_metre
+    return {
+        "bounds": {
+            "minX": left * res,
+            "minY": top * res,
+            "maxX": (left + w) * res,
+            "maxY": (top + h) * res,
+        },
+        "resolution": res,
+        "room_chains": _chains_from_masks(masks),
+    }
+
+
 def _room_entry(rid, room, to_m) -> dict:
     """Export one room, anchoring the label at the bbox centre when the parser gave no text position.
 
@@ -412,7 +479,8 @@ def _room_entry(rid, room, to_m) -> dict:
     }
 
 def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
-               json_grid: bool = False, units_per_metre: float = 1.0,
+               json_grid: bool = False, dreame_grid: bool = False,
+               units_per_metre: float = 1.0,
                carpets: list[list[float]] | None = None,
                path_segments: list[list[tuple[float, float]]] | None = None,
                ) -> dict[str, Any]:
@@ -422,8 +490,10 @@ def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
     emitted in metres. `ijai_grid` is True only when `unpacked` is an ijai
     `RobotMap` protobuf; `json_grid` is True only for the xiaomi JSON-map
     family, whose decrypted payload carries its own labelled pixel grid
-    (`extract_json_grid`). Both yield room contours; a brand with neither
-    passes False for both and gets the overlays-only contract.
+    (`extract_json_grid`); `dreame_grid` is True only for dreame, whose frame
+    carries a labelled cell grid after its 27-byte header
+    (`extract_dreame_chains`). Each yields room contours; a brand with none
+    passes False for all and gets the overlays-only contract.
 
     `units_per_metre` is the divisor turning this brand's parser units into
     metres -- see `map_parsers.overlay_units_per_metre`. It is 1.0 for every
@@ -438,6 +508,17 @@ def vector_map(md: Any, unpacked: bytes, *, ijai_grid: bool = True,
         out = extract_json_grid(unpacked, units_per_metre=units_per_metre)
     else:
         out = _empty_grid()
+        if dreame_grid:
+            # Real room outlines for dreame: without them the card falls back
+            # to per-room bounding-box rectangles, which overlap wherever a
+            # room is not rectangular (i.e. always).
+            chains_grid = extract_dreame_chains(
+                unpacked,
+                valid_ids={rid for rid in (md.rooms or {}) if isinstance(rid, int)},
+                units_per_metre=units_per_metre,
+            )
+            if chains_grid:
+                out.update(chains_grid)
 
     def to_m(value: Any) -> Any:
         """Parser unit -> metre. Passes None through: `Room.pos_x`/`pos_y` are

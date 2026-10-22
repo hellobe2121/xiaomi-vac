@@ -138,14 +138,17 @@ def overlay_units_per_metre(brand: str) -> float:
     """Divisor converting this brand's overlay coordinates to metres.
 
     `vacuum_map_parser_xiaomi` (the JSON-map family: ov71gl, ov81gl, d109gl,
-    ...) reports every overlay coordinate in MILLIMETRES. It builds its
-    coordinate transform with the payload `resolution` as "Millimeters per
-    pixel" and `minX`/`minY` straight from the mm `origin_x`/`origin_y`, and
-    reads the dock from the raw mm `pile_x`/`pile_y`. Every other brand
-    already emits metres -- the unit `map_vector.vector_map` documents and the
-    bundled card draws in -- so only this family needs scaling.
+    ...) and `vacuum_map_parser_dreame` report every overlay coordinate in
+    MILLIMETRES. The xiaomi family builds its coordinate transform with the
+    payload `resolution` as "Millimeters per pixel" and `minX`/`minY` straight
+    from the mm `origin_x`/`origin_y`, and reads the dock from the raw mm
+    `pile_x`/`pile_y`; dreame reads the header positions (dock, vacuum) and
+    room bboxes as raw mm — `Room` corners are `(grid + left) * pixel_size`.
+    The card and `Device.zone_clean_params` both work in metres (the latter
+    multiplies by 1000 for the wire), so only these families need scaling.
+    Every other brand already emits metres.
     """
-    return 1000.0 if brand == "xiaomi" else 1.0
+    return 1000.0 if brand in ("xiaomi", "dreame") else 1.0
 
 
 # Model suffixes the installed vacuum_map_parser_ijai does not list as hex-key

@@ -770,7 +770,9 @@ DREAME_P2149O_CORE = CoreCapability(
     stop=Action(2, 2),  # stop-sweeping — "Pause"
     charge=Action(3, 1),  # start-charge — "Return to Charge"
     locate=Action(7, 1),  # position — "Locate My Robot"
-    status_map={1: 'cleaning', 2: 'idle', 3: 'paused', 4: 'error', 5: 'returning', 6: 'docked'},
+    # 13 = charging completed (station models report this once charged on the
+    # dock; verified live on an r2211o — without it the entity sits on idle).
+    status_map={1: 'cleaning', 2: 'idle', 3: 'paused', 4: 'error', 5: 'returning', 6: 'docked', 13: 'docked'},
     modes={'silent': 0, 'basic': 1, 'strong': 2, 'full_speed': 3},
     fan_speeds={'mode_quiet': 0, 'mode_standard': 1, 'mode_medium': 2, 'mode_strong': 3},
     water_levels={'low': 1, 'medium': 2, 'high': 3},
