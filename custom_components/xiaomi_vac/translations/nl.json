@@ -11,7 +11,7 @@
       },
       "credentials": {
         "title": "Meld u aan bij Mi Home",
-        "description": "Meld u eenmaal aan. U blijft daarna ingelogd.",
+        "description": "Meld u eenmalig aan. U blijft daarna ingelogd.",
         "data": {
           "username": "E-mail, telefoonnummer of Mi-account-ID",
           "password": "Wachtwoord"
@@ -27,7 +27,7 @@
       },
       "captcha": {
         "title": "Snelle controle",
-        "description": "Xiaomi wilt zeker weten dat u echt bent. Typ de onderstaande tekens:\n\n![captcha]({captcha_url})",
+        "description": "Xiaomi wilt zeker weten dat u het echt bent. Typ de onderstaande tekens:\n\n![captcha]({captcha_url})",
         "data": {
           "code": "Tekens uit de afbeelding"
         }
